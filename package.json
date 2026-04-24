@@ -1,0 +1,53 @@
+{
+  "name": "storm-ai",
+  "version": "0.1.0",
+  "description": "Context-aware project scaffolding for AI coding agents (Claude Code + Ollama).",
+  "type": "module",
+  "bin": {
+    "storm": "./bin/storm.js"
+  },
+  "main": "./src/cli.js",
+  "scripts": {
+    "start": "node bin/storm.js",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "ollama",
+    "ai",
+    "scaffolding",
+    "cli",
+    "context"
+  ],
+  "author": "Diego Belotti",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Diegodelp/storm-ai.git"
+  },
+  "homepage": "https://github.com/Diegodelp/storm-ai#readme",
+  "bugs": {
+    "url": "https://github.com/Diegodelp/storm-ai/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.25.0",
+    "@babel/traverse": "^7.25.0",
+    "@clack/prompts": "^0.7.0",
+    "commander": "^12.1.0",
+    "sharp": "^0.33.5",
+    "string-width": "^8.2.0"
+  }
+}
