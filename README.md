@@ -1,4 +1,4 @@
-# @belotti/storm-ai
+# storm-ai
 
 **Context-aware project scaffolding for AI coding agents.**
 
