@@ -1,4 +1,4 @@
-# storm-ai
+# Storm-ai
 
 **Context-aware project scaffolding for AI coding agents.**
 
