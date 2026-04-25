@@ -19,7 +19,7 @@ relevant to the current task.
 
 ## Status
 
-**v0.1.4 — MVP.** The core and CLI work; the interactive UI is in place.
+**v0.1.5 — MVP.** The core and CLI work; the interactive UI is in place.
 Proactive file watcher, plugin system, and non-JS/TS language support are
 planned for v0.2+.
 
