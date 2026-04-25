@@ -8,7 +8,7 @@
  *   - Logo half-blocks centrado (80 cols).
  *   - Texto "Usa ↑ ↓ y ENTER." centrado.
  *   - Menú con picker custom, ítems centrados, highlight con `>`.
- *   - Footer abajo: "STORM CLI v0.1.0  ...  https://storm.dev"
+ *   - Footer abajo: "STORM CLI v0.1.0  ...  https://storm-ai-dev.vercel.app/"
  */
 
 import * as clack from '@clack/prompts';
@@ -58,7 +58,7 @@ function makeFooterRenderer() {
     if (height < 8) return;
 
     const left = ansi.cyan(' STORM CLI') + '   ' + ansi.dim('v' + VERSION);
-    const right = ansi.dim('https://storm.dev ');
+    const right = ansi.dim('https://storm-ai-dev.vercel.app/');
     const visibleLen = (s) => ansi.stripAnsi(s).length;
     const gap = Math.max(2, width - visibleLen(left) - visibleLen(right));
     const line = left + ' '.repeat(gap) + right;

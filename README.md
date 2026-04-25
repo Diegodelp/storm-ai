@@ -19,9 +19,9 @@ relevant to the current task.
 
 ## Status
 
-**v0.1.5 — MVP.** The core and CLI work; the interactive UI is in place.
+**v0.2.1 — MVP.** The core and CLI work; the interactive UI is in place.
 Proactive file watcher, plugin system, and non-JS/TS language support are
-planned for v0.2+.
+planned for v0.3+.
 
 ## Install
 
@@ -132,9 +132,9 @@ node --test test/
 
 ## Roadmap
 
-- **v0.2** — Proactive file watcher (integrated, not daemon). Plugin
+- **v0.3** — Proactive file watcher (integrated, not daemon). Plugin
   architecture. Ollama fallback for ranking in huge projects.
-- **v0.3** — Python + Go parsing. Multi-project view. `storm sync` to
+- **v0.4** — Python + Go parsing. Multi-project view. `storm sync` to
   pull the compact context across machines.
 
 ## License
