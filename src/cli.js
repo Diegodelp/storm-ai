@@ -29,6 +29,7 @@ import { sync as syncCmd } from './commands/sync.js';
 import { runInteractiveMenu } from './ui/menu.js';
 import { runNewWizard } from './ui/wizard-new.js';
 import { runSkillAddWizard } from './ui/wizard-skill.js';
+import { runImportWizard } from './ui/wizard-import.js';
 import * as ansi from './ui/ansi.js';
 
 const VERSION = '0.1.0';
@@ -389,6 +390,19 @@ export async function runCli(argv) {
       } else {
         console.log(ansi.yellow('⚠') + ` ${r.reason}`);
       }
+    });
+
+  // -------------------------------------------------------------------------
+  // storm import [path]
+  // -------------------------------------------------------------------------
+  program
+    .command('import [path]')
+    .description('Importa un proyecto existente: analiza con LLM y agrega scaffolding storm.')
+    .action(async (importPath) => {
+      await runImportWizard({
+        cwd: process.cwd(),
+        providedPath: importPath,
+      });
     });
 
   // -------------------------------------------------------------------------

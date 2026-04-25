@@ -90,6 +90,7 @@ export async function runInteractiveMenu({ cwd }) {
   const options = [
     { value: 'new',     label: 'Crear proyecto' },
     { value: 'open',    label: 'Seleccionar proyecto' },
+    { value: 'import',  label: 'Importar proyecto existente' },
     { value: 'install', label: 'Instalar acceso storm en Escritorio' },
     { value: 'exit',    label: 'Salir' },
   ];
@@ -130,6 +131,9 @@ export async function runInteractiveMenu({ cwd }) {
         await runNewWizard({ cwd });
       } else if (choice === 'open') {
         await runOpenWizard({ cwd });
+      } else if (choice === 'import') {
+        const { runImportWizard } = await import('./wizard-import.js');
+        await runImportWizard({ cwd });
       } else if (choice === 'install') {
         const spinner = clack.spinner();
         spinner.start('Instalando acceso directo');
