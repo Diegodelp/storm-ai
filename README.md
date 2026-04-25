@@ -19,16 +19,19 @@ relevant to the current task.
 
 ## Status
 
-**v0.1.0 — MVP.** The core and CLI work; the interactive UI is in place.
+**v0.1.4 — MVP.** The core and CLI work; the interactive UI is in place.
 Proactive file watcher, plugin system, and non-JS/TS language support are
 planned for v0.2+.
 
 ## Install
 
 ```bash
-npm install -g @belotti/storm-ai
+npm install -g storm-ai
 # or
-pnpm add -g @belotti/storm-ai
+npm i storm-ai
+# or
+pnpm add -g storm-ai
+
 ```
 
 Requires Node.js 20 or later.
