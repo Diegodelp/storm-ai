@@ -24,6 +24,7 @@ export async function runSkillAddWizard({ cwd }) {
   }
 
   clack.intro(ansi.bold('Nueva skill'));
+  clack.log.info(ansi.dim('Tip: presioná Esc en cualquier momento para volver al menú.'));
 
   const name = await clack.text({
     message: 'Nombre de la skill',

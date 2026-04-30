@@ -2,15 +2,12 @@
  * Wizard interactivo para `storm config`.
  *
  * Muestra el estado actual de la configuración global y permite
- * editar cada campo. La configuración vive en ~/.storm-ai/config.json
- * (la ruta exacta se muestra al final).
+ * editar cada campo. La configuración vive en ~/.storm-ai/config.json.
  *
- * Campos que se pueden modificar:
- *   - Provider por defecto       (ollama-cloud | ollama-local | claude)
- *   - Modelo por defecto         (cambia según el provider)
- *   - Agent por defecto          (claude-code | opencode | custom)
- *   - Launch command custom      (override total para usuarios avanzados)
- *   - OLLAMA_HOST                (URL del daemon Ollama)
+ * Navegación: en CADA pregunta el usuario tiene "← Volver" como opción
+ * explícita, y Esc/Ctrl+C también vuelven al menú anterior en vez de
+ * cerrar storm. La única salida del wizard es elegir "Volver" en el
+ * menú principal del config.
  */
 
 import * as clack from '@clack/prompts';
@@ -26,11 +23,15 @@ import { AGENTS, detectAgent, installAgent } from '../core/agents.js';
 import * as ansi from './ansi.js';
 import { platform } from 'node:os';
 
+/** Sentinel value used in submenus for the "go back" option. */
+const BACK = '__back__';
+
 /**
  * @param {{cwd: string}} _input
  */
 export async function runConfigWizard(_input) {
   clack.intro(ansi.bold('Configuración global'));
+  clack.log.info(ansi.dim('Tip: presioná Esc en cualquier momento para cancelar el paso actual.'));
 
   while (true) {
     const cfg = await readAllConfig();
@@ -39,16 +40,18 @@ export async function runConfigWizard(_input) {
     const action = await clack.select({
       message: '¿Qué querés hacer?',
       options: [
-        { value: 'provider',     label: 'Cambiar provider y modelo por defecto' },
-        { value: 'agent',        label: 'Cambiar agent por defecto (Claude Code / OpenCode / ...)' },
-        { value: 'launchCmd',    label: 'Definir un comando de lanzamiento custom' },
-        { value: 'ollamaHost',   label: 'Cambiar OLLAMA_HOST' },
-        { value: 'install',      label: 'Instalar/verificar agent' },
-        { value: 'reset',        label: 'Resetear todo a valores por defecto' },
-        { value: 'open',         label: 'Mostrar ruta del archivo de config' },
-        { value: 'exit',         label: 'Volver' },
+        { value: 'provider',   label: 'Cambiar provider y modelo por defecto' },
+        { value: 'agent',      label: 'Cambiar agent por defecto (Claude Code / OpenCode / ...)' },
+        { value: 'launchCmd',  label: 'Definir un comando de lanzamiento custom' },
+        { value: 'ollamaHost', label: 'Cambiar OLLAMA_HOST' },
+        { value: 'install',    label: 'Instalar/verificar agent' },
+        { value: 'reset',      label: 'Resetear todo a valores por defecto' },
+        { value: 'open',       label: 'Mostrar ruta del archivo de config' },
+        { value: 'exit',       label: '← Volver al menú principal' },
       ],
     });
+
+    // Cancel here = leave the config wizard back to the main menu.
     if (clack.isCancel(action) || action === 'exit') {
       clack.outro(ansi.dim('Listo.'));
       return;
@@ -90,14 +93,15 @@ function showStatus(cfg) {
 
 async function editProvider() {
   const provider = await clack.select({
-    message: 'Provider',
+    message: 'Provider (Esc para volver)',
     options: [
       { value: 'ollama-cloud', label: 'Ollama (cloud)', hint: 'Modelos hosteados, gratis con login' },
       { value: 'ollama-local', label: 'Ollama (local)', hint: 'Modelos en tu máquina' },
       { value: 'claude',       label: 'Claude API',     hint: 'Anthropic, requiere ANTHROPIC_API_KEY' },
+      { value: BACK,           label: '← Volver' },
     ],
   });
-  if (clack.isCancel(provider)) return;
+  if (clack.isCancel(provider) || provider === BACK) return;
   await setConfigValue('provider', provider);
 
   // Now pick a model that fits the provider.
@@ -108,12 +112,13 @@ async function editProvider() {
       options: [
         ...CLOUD_MODELS.map((m) => ({ value: m.name, label: m.label, hint: m.hint })),
         { value: '__custom__', label: 'Custom...' },
+        { value: BACK,         label: '← Volver (provider quedó seteado, modelo no)' },
       ],
     });
-    if (clack.isCancel(choice)) return;
+    if (clack.isCancel(choice) || choice === BACK) return;
     if (choice === '__custom__') {
       const c = await clack.text({
-        message: 'Nombre del modelo (debe terminar en :cloud)',
+        message: 'Nombre del modelo (debe terminar en :cloud) — Esc para volver',
         validate: (v) => v?.trim().endsWith(':cloud') ? undefined : 'Modelos cloud terminan en :cloud',
       });
       if (clack.isCancel(c)) return;
@@ -127,11 +132,14 @@ async function editProvider() {
       options: [
         ...LOCAL_RECOMMENDED.map((m) => ({ value: m.name, label: m.label, hint: m.hint })),
         { value: '__custom__', label: 'Custom...' },
+        { value: BACK,         label: '← Volver (provider quedó seteado, modelo no)' },
       ],
     });
-    if (clack.isCancel(choice)) return;
+    if (clack.isCancel(choice) || choice === BACK) return;
     if (choice === '__custom__') {
-      const c = await clack.text({ message: 'Nombre del modelo local' });
+      const c = await clack.text({
+        message: 'Nombre del modelo local — Esc para volver',
+      });
       if (clack.isCancel(c)) return;
       model = c.trim();
     } else {
@@ -148,18 +156,19 @@ async function editProvider() {
 
 async function editAgent() {
   const choice = await clack.select({
-    message: 'Agent',
+    message: 'Agent (Esc para volver)',
     options: [
       ...AGENTS.map((a) => ({ value: a.id, label: a.label, hint: a.hint })),
       { value: '__custom__', label: 'Otro... (texto libre)' },
+      { value: BACK,         label: '← Volver' },
     ],
   });
-  if (clack.isCancel(choice)) return;
+  if (clack.isCancel(choice) || choice === BACK) return;
 
   let agentId = choice;
   if (choice === '__custom__') {
     const c = await clack.text({
-      message: 'ID del agent (libre)',
+      message: 'ID del agent (Esc para volver)',
       placeholder: 'mi-agent',
       validate: (v) => (v?.trim() ? undefined : 'No puede estar vacío'),
     });
@@ -190,12 +199,13 @@ async function editLaunchCommand() {
       ansi.dim('  python -m my_agent --provider ollama --model {{model}}'),
       '',
       'Para volver al template del agent (no usar comando custom), dejá vacío.',
+      ansi.dim('Esc en cualquier momento para cancelar.'),
     ].join('\n'),
     'Comando custom',
   );
 
   const cmd = await clack.text({
-    message: 'Comando de lanzamiento',
+    message: 'Comando de lanzamiento (Esc para volver)',
     placeholder: 'ollama launch opencode --model {{model}}',
     initialValue: currentValue,
   });
@@ -213,7 +223,7 @@ async function editLaunchCommand() {
 async function editOllamaHost() {
   const cur = await readAllConfig();
   const host = await clack.text({
-    message: 'OLLAMA_HOST',
+    message: 'OLLAMA_HOST (Esc para volver)',
     placeholder: 'http://127.0.0.1:11434',
     initialValue: cur.ollamaHost ?? 'http://127.0.0.1:11434',
     validate: (v) =>
@@ -226,10 +236,13 @@ async function editOllamaHost() {
 
 async function runInstallSubmenu() {
   const choice = await clack.select({
-    message: '¿Qué agent verificar/instalar?',
-    options: AGENTS.map((a) => ({ value: a.id, label: a.label, hint: a.hint })),
+    message: '¿Qué agent verificar/instalar? (Esc para volver)',
+    options: [
+      ...AGENTS.map((a) => ({ value: a.id, label: a.label, hint: a.hint })),
+      { value: BACK, label: '← Volver' },
+    ],
   });
-  if (clack.isCancel(choice)) return;
+  if (clack.isCancel(choice) || choice === BACK) return;
 
   const status = await detectAgent(choice);
   if (status.installed) {

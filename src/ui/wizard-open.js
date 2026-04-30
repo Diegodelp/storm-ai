@@ -13,6 +13,7 @@ import * as ansi from './ansi.js';
 
 export async function runOpenWizard() {
   clack.intro(ansi.bold('Seleccionar proyecto'));
+  clack.log.info(ansi.dim('Tip: presioná Esc en cualquier momento para volver al menú.'));
 
   const spinner = clack.spinner();
   spinner.start('Buscando proyectos storm');

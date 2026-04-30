@@ -25,10 +25,11 @@ import * as ansi from './ansi.js';
 
 export async function runNewWizard({ cwd }) {
   clack.intro(ansi.bold('Nuevo proyecto'));
+  clack.log.info(ansi.dim('Tip: presioná Esc en cualquier momento para volver al menú.'));
 
   // Step 0: ¿desde template o desde cero?
   const startMode = await clack.select({
-    message: '¿Cómo querés arrancar?',
+    message: '¿Cómo querés arrancar? (Esc para volver al menú)',
     options: [
       {
         value: 'template',
@@ -40,10 +41,11 @@ export async function runNewWizard({ cwd }) {
         label: 'Desde cero',
         hint: 'Wizard manual: vos definís stack, ramas, agentes',
       },
+      { value: '__back__', label: '← Volver al menú principal' },
     ],
     initialValue: 'template',
   });
-  if (clack.isCancel(startMode)) return cancel();
+  if (clack.isCancel(startMode) || startMode === '__back__') return cancel();
 
   if (startMode === 'template') {
     const { runNewFromTemplateWizard } = await import('./wizard-new-template.js');

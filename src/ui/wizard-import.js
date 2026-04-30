@@ -35,12 +35,13 @@ import * as ansi from './ansi.js';
  */
 export async function runImportWizard(input) {
   clack.intro(ansi.bold('Importar proyecto'));
+  clack.log.info(ansi.dim('Tip: presioná Esc en cualquier momento para volver al menú.'));
 
   const projectRoot = path.resolve(input.cwd, input.providedPath || '.');
 
   // 1. Profundidad
   const mode = await clack.select({
-    message: '¿Qué tan profundo querés analizar?',
+    message: '¿Qué tan profundo querés analizar? (Esc para volver al menú)',
     options: [
       {
         value: 'shallow',
@@ -52,10 +53,10 @@ export async function runImportWizard(input) {
         label: 'Profundo (~30s)',
         hint: 'Lo anterior + muestras de código fuente. Mejor calidad.',
       },
+      { value: '__back__', label: '← Volver al menú principal' },
     ],
-    initialValue: 'shallow',
   });
-  if (clack.isCancel(mode)) return cancel();
+  if (clack.isCancel(mode) || mode === '__back__') return cancel();
 
   // 2. Provider
   let provider = await getDefaultProvider();
