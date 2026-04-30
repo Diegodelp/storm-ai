@@ -1,6 +1,6 @@
 {
   "name": "storm-ai",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Context-aware project scaffolding for AI coding agents (Claude Code + Ollama).",
   "type": "module",
   "bin": {
