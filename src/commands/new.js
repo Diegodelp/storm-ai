@@ -96,6 +96,8 @@ export async function createProject(input) {
     database: input.database ?? '',
     databaseId: input.databaseId ?? 'other',
     model: input.model,
+    agent: input.agent ?? 'claude-code',
+    launch: input.launch ?? {},
     skills,
     agents: input.agents ?? [],
     branches: input.branches ?? [],
@@ -157,6 +159,7 @@ export async function createProject(input) {
   const refresh = await refreshCompactContext(projectRoot, {
     branches: config.compact_context.branches,
     mapFilesPerBranch: config.compact_context.map_files_per_branch,
+    ignoredPaths: config.compact_context.ignored_paths ?? [],
     tasks: [],
   });
   for (const w of refresh.warnings) warnings.push(w);

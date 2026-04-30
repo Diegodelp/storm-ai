@@ -42,6 +42,7 @@ export async function add(input) {
   const refresh = await refreshCompactContext(root, {
     branches: config.compact_context.branches,
     mapFilesPerBranch: config.compact_context.map_files_per_branch,
+    ignoredPaths: config.compact_context.ignored_paths ?? [],
     tasks: state.tasks,
   });
 
@@ -84,6 +85,7 @@ export async function remove(input) {
   const refresh = await refreshCompactContext(root, {
     branches: config.compact_context.branches,
     mapFilesPerBranch: config.compact_context.map_files_per_branch,
+    ignoredPaths: config.compact_context.ignored_paths ?? [],
     tasks: state.tasks,
   });
 
@@ -121,6 +123,7 @@ export async function pin(input) {
   const refresh = await refreshCompactContext(root, {
     branches: config.compact_context.branches,
     mapFilesPerBranch: config.compact_context.map_files_per_branch,
+    ignoredPaths: config.compact_context.ignored_paths ?? [],
     tasks: state.tasks,
   });
 
@@ -145,6 +148,7 @@ export async function unpin(input) {
   const refresh = await refreshCompactContext(root, {
     branches: config.compact_context.branches,
     mapFilesPerBranch: config.compact_context.map_files_per_branch,
+    ignoredPaths: config.compact_context.ignored_paths ?? [],
     tasks: state.tasks,
   });
 

@@ -55,18 +55,23 @@ test('buildCommand for claude provider: runs `claude` directly', () => {
   assert.deepEqual(r.args, []);
 });
 
-test('buildCommand for unknown provider falls back to claude', () => {
-  const r = buildCommand({ provider: 'some-future-thing', modelName: null });
-  assert.equal(r.command, 'claude');
+test('buildCommand for unknown provider throws (no fallback)', () => {
+  // The new agent-aware launcher throws when the provider is unknown,
+  // because there's no launch template for it. Users who need this
+  // should configure a custom launch command via `storm config`.
+  assert.throws(
+    () => buildCommand({ provider: 'some-future-thing', modelName: null }),
+    /no tiene un launch template/,
+  );
 });
 
 test('buildCommand throws when ollama provider has no model', () => {
   assert.throws(
     () => buildCommand({ provider: 'ollama-cloud', modelName: null }),
-    /requires a model/,
+    /requiere un model name/,
   );
   assert.throws(
     () => buildCommand({ provider: 'ollama-local', modelName: null }),
-    /requires a model/,
+    /requiere un model name/,
   );
 });

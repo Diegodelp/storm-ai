@@ -8,7 +8,7 @@
  *   - Logo half-blocks centrado (80 cols).
  *   - Texto "Usa ↑ ↓ y ENTER." centrado.
  *   - Menú con picker custom, ítems centrados, highlight con `>`.
- *   - Footer abajo: "STORM CLI v0.1.0  ...  https://storm-ai-dev.vercel.app/"
+ *   - Footer abajo: "STORM CLI v0.1.0  ...  https://storm.dev"
  */
 
 import * as clack from '@clack/prompts';
@@ -58,7 +58,7 @@ function makeFooterRenderer() {
     if (height < 8) return;
 
     const left = ansi.cyan(' STORM CLI') + '   ' + ansi.dim('v' + VERSION);
-    const right = ansi.dim('https://storm-ai-dev.vercel.app/');
+    const right = ansi.dim('https://storm.dev ');
     const visibleLen = (s) => ansi.stripAnsi(s).length;
     const gap = Math.max(2, width - visibleLen(left) - visibleLen(right));
     const line = left + ' '.repeat(gap) + right;
@@ -91,6 +91,7 @@ export async function runInteractiveMenu({ cwd }) {
     { value: 'new',     label: 'Crear proyecto' },
     { value: 'open',    label: 'Seleccionar proyecto' },
     { value: 'import',  label: 'Importar proyecto existente' },
+    { value: 'config',  label: 'Configuración' },
     { value: 'install', label: 'Instalar acceso storm en Escritorio' },
     { value: 'exit',    label: 'Salir' },
   ];
@@ -134,6 +135,9 @@ export async function runInteractiveMenu({ cwd }) {
       } else if (choice === 'import') {
         const { runImportWizard } = await import('./wizard-import.js');
         await runImportWizard({ cwd });
+      } else if (choice === 'config') {
+        const { runConfigWizard } = await import('./wizard-config.js');
+        await runConfigWizard({ cwd });
       } else if (choice === 'install') {
         const spinner = clack.spinner();
         spinner.start('Instalando acceso directo');

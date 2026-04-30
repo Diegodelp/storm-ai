@@ -3,15 +3,29 @@
  *
  * Lives at ~/.storm-ai/config.json and stores user preferences that
  * apply across all projects:
- *   - default AI provider (used by `storm import` and as a wizard default)
- *   - default model name
- *   - whether the user finished the first-run setup
+ *   - default AI provider + model (used by `storm import` and as
+ *     a default in the wizards)
+ *   - default agent (Claude Code, OpenCode, ...)
+ *   - default custom launch command (advanced)
+ *   - OLLAMA_HOST override (advanced)
  *
  * Per-project config still lives in <project>/project.config.json — this
  * is for things that aren't project-specific.
  *
  * The schema is forward-compatible: unknown fields are preserved. Reading
  * a missing or corrupt file returns sensible defaults (no exception).
+ *
+ * Schema:
+ *   {
+ *     "defaultProvider": {
+ *       "provider": "ollama-cloud" | "ollama-local" | "claude",
+ *       "model": "kimi-k2.6:cloud" | null
+ *     },
+ *     "defaultAgent": "claude-code" | "opencode" | <other>,
+ *     "defaultLaunchCommand": "<shell string with {{model}} placeholder>" | null,
+ *     "ollamaHost": "http://127.0.0.1:11434",
+ *     "updatedAt": "<ISO timestamp>"
+ *   }
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -23,15 +37,21 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 /**
  * @typedef {Object} GlobalConfig
- * @property {Object} [defaultProvider]
- * @property {'ollama-cloud'|'ollama-local'|'claude'} [defaultProvider.provider]
- * @property {string|null} [defaultProvider.model]
+ * @property {{provider: string, model: string|null}|null} [defaultProvider]
+ * @property {string} [defaultAgent]
+ * @property {string|null} [defaultLaunchCommand]
+ * @property {string} [ollamaHost]
  * @property {string} [updatedAt]
  */
 
 /** @returns {GlobalConfig} */
 function emptyConfig() {
-  return { defaultProvider: null };
+  return {
+    defaultProvider: null,
+    defaultAgent: 'claude-code',
+    defaultLaunchCommand: null,
+    ollamaHost: 'http://127.0.0.1:11434',
+  };
 }
 
 /**
@@ -43,7 +63,8 @@ export async function readGlobalConfig() {
     const raw = await readFile(CONFIG_FILE, 'utf8');
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return emptyConfig();
-    return parsed;
+    // Merge with defaults so missing fields are filled in.
+    return { ...emptyConfig(), ...parsed };
   } catch {
     return emptyConfig();
   }
@@ -59,8 +80,11 @@ export async function writeGlobalConfig(config) {
   await writeFile(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n', 'utf8');
 }
 
+// ---------------------------------------------------------------------------
+// Convenience accessors
+// ---------------------------------------------------------------------------
+
 /**
- * Convenience: read just the default provider, or null if not set.
  * @returns {Promise<{provider: string, model: string|null}|null>}
  */
 export async function getDefaultProvider() {
@@ -73,7 +97,6 @@ export async function getDefaultProvider() {
 }
 
 /**
- * Convenience: persist a default provider so future commands can use it.
  * @param {{provider: string, model: string|null}} input
  */
 export async function setDefaultProvider(input) {
@@ -84,3 +107,57 @@ export async function setDefaultProvider(input) {
   };
   await writeGlobalConfig(cfg);
 }
+
+/**
+ * @returns {Promise<string>}
+ */
+export async function getDefaultAgent() {
+  const cfg = await readGlobalConfig();
+  return cfg.defaultAgent ?? 'claude-code';
+}
+
+/**
+ * @param {string} agentId
+ */
+export async function setDefaultAgent(agentId) {
+  const cfg = await readGlobalConfig();
+  cfg.defaultAgent = agentId;
+  await writeGlobalConfig(cfg);
+}
+
+/**
+ * @returns {Promise<string|null>}
+ */
+export async function getDefaultLaunchCommand() {
+  const cfg = await readGlobalConfig();
+  return cfg.defaultLaunchCommand ?? null;
+}
+
+/**
+ * @param {string|null} cmd
+ */
+export async function setDefaultLaunchCommand(cmd) {
+  const cfg = await readGlobalConfig();
+  cfg.defaultLaunchCommand = cmd && cmd.trim() ? cmd.trim() : null;
+  await writeGlobalConfig(cfg);
+}
+
+/**
+ * @returns {Promise<string>}
+ */
+export async function getOllamaHost() {
+  const cfg = await readGlobalConfig();
+  return cfg.ollamaHost ?? 'http://127.0.0.1:11434';
+}
+
+/**
+ * @param {string} host
+ */
+export async function setOllamaHost(host) {
+  const cfg = await readGlobalConfig();
+  cfg.ollamaHost = host;
+  await writeGlobalConfig(cfg);
+}
+
+/** Path of the config file (for the wizard "open in editor" hint). */
+export const CONFIG_FILE_PATH = CONFIG_FILE;

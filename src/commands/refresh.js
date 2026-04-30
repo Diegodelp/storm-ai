@@ -43,6 +43,7 @@ export async function refresh(input) {
   const result = await refreshCompactContext(root, {
     branches: config.compact_context.branches,
     mapFilesPerBranch: config.compact_context.map_files_per_branch,
+    ignoredPaths: config.compact_context.ignored_paths ?? [],
     tasks: state.tasks,
   });
 

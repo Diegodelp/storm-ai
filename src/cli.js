@@ -56,8 +56,20 @@ export async function runCli(argv) {
     .option('-d, --description <text>', 'Project description')
     .option('-s, --stack <text>', 'Stack (e.g. "Next.js + Prisma")')
     .option('--db <text>', 'Database description')
+    .option('--template <id>', 'Use a template from the registry')
     .option('--force', 'Overwrite if the directory exists')
     .action(async (name, opts) => {
+      if (opts.template) {
+        // Direct template flow with optional name.
+        const { runNewFromTemplateWizardDirect } = await import('./ui/wizard-new-template-direct.js');
+        await runNewFromTemplateWizardDirect({
+          cwd: process.cwd(),
+          templateId: opts.template,
+          name: name || null,
+        });
+        return;
+      }
+
       if (!name) {
         // Name omitted → prompt the user with the full wizard.
         await runNewWizard({ cwd: process.cwd() });
@@ -403,6 +415,141 @@ export async function runCli(argv) {
         cwd: process.cwd(),
         providedPath: importPath,
       });
+    });
+
+  // -------------------------------------------------------------------------
+  // storm templates
+  // -------------------------------------------------------------------------
+  const templates = program
+    .command('templates')
+    .description('List or inspect available project templates.');
+
+  templates
+    .command('list')
+    .description('List templates from the registry.')
+    .action(async () => {
+      const { listTemplates } = await import('./commands/templates.js');
+      const reg = await listTemplates();
+      if (reg.length === 0) {
+        console.log(ansi.dim('Todavía no hay templates en el registry.'));
+        console.log(
+          ansi.dim('Mirá ') +
+            'https://github.com/Diegodelp/storm-ai/blob/main/templates/registry.json' +
+            ansi.dim(' para más info.'),
+        );
+        return;
+      }
+      console.log('');
+      for (const t of reg) {
+        console.log(`  ${ansi.cyan(t.id.padEnd(24))} ${ansi.bold(t.label)}`);
+        if (t.description) console.log(`  ${' '.repeat(24)} ${ansi.dim(t.description)}`);
+        console.log(`  ${' '.repeat(24)} ${ansi.dim(t.repo)}`);
+        console.log('');
+      }
+      console.log(ansi.dim('Usá:  storm new <name> --template <id>'));
+    });
+
+  templates
+    .command('info <id>')
+    .description('Show details of a specific template (clones to inspect metadata).')
+    .action(async (id) => {
+      const { getTemplate } = await import('./commands/templates.js');
+      const entry = await getTemplate(id);
+      if (!entry) {
+        console.log(ansi.red('✗') + ` No existe el template "${id}".`);
+        return;
+      }
+      console.log('');
+      console.log(ansi.bold(entry.label));
+      console.log(ansi.dim(entry.description));
+      console.log('');
+      console.log(`  id:       ${ansi.cyan(entry.id)}`);
+      console.log(`  repo:     ${entry.repo}`);
+      console.log(`  ref:      ${entry.ref ?? 'main'}`);
+      if (entry.stackId) console.log(`  stack:    ${entry.stackId}`);
+      if (entry.minStormVersion) {
+        console.log(`  min storm version: ${entry.minStormVersion}`);
+      }
+      console.log('');
+      console.log(ansi.dim('Para crear un proyecto:  storm new <name> --template ' + entry.id));
+    });
+
+  // -------------------------------------------------------------------------
+  // storm config
+  // -------------------------------------------------------------------------
+  const cfgCmd = program
+    .command('config')
+    .description('Show or modify the global storm-ai configuration.')
+    .action(async () => {
+      // No subcommand → run interactive wizard.
+      const { runConfigWizard } = await import('./ui/wizard-config.js');
+      await runConfigWizard({ cwd: process.cwd() });
+    });
+
+  cfgCmd
+    .command('get [key]')
+    .description('Print the value of a config key (or all keys if omitted).')
+    .action(async (key) => {
+      const { readAllConfig, getConfigValue, CONFIG_FILE_PATH } =
+        await import('./commands/config.js');
+      if (!key) {
+        const cfg = await readAllConfig();
+        console.log('');
+        console.log(`  ${ansi.dim('file:')}            ${CONFIG_FILE_PATH}`);
+        console.log(`  ${'provider:'.padEnd(17)}${cfg.defaultProvider?.provider ?? ansi.dim('(unset)')}`);
+        console.log(`  ${'model:'.padEnd(17)}${cfg.defaultProvider?.model ?? ansi.dim('(unset)')}`);
+        console.log(`  ${'agent:'.padEnd(17)}${cfg.defaultAgent ?? 'claude-code'}`);
+        console.log(`  ${'launchCommand:'.padEnd(17)}${cfg.defaultLaunchCommand ?? ansi.dim('(unset, uses agent template)')}`);
+        console.log(`  ${'ollamaHost:'.padEnd(17)}${cfg.ollamaHost ?? 'http://127.0.0.1:11434'}`);
+        return;
+      }
+      try {
+        const r = await getConfigValue(key);
+        if (r.value == null) {
+          console.log(ansi.dim('(no value)'));
+        } else {
+          console.log(r.value);
+        }
+      } catch (err) {
+        console.error(ansi.red('error: ') + err.message);
+        process.exitCode = 1;
+      }
+    });
+
+  cfgCmd
+    .command('set <key> <value>')
+    .description('Set a config key. Keys: provider, model, agent, launchCommand, ollamaHost.')
+    .action(async (key, value) => {
+      const { setConfigValue } = await import('./commands/config.js');
+      try {
+        await setConfigValue(key, value);
+        console.log(ansi.green('✓') + ` ${key} = ${ansi.cyan(value)}`);
+      } catch (err) {
+        console.error(ansi.red('error: ') + err.message);
+        process.exitCode = 1;
+      }
+    });
+
+  cfgCmd
+    .command('unset <key>')
+    .description('Clear a config key.')
+    .action(async (key) => {
+      const { setConfigValue } = await import('./commands/config.js');
+      try {
+        await setConfigValue(key, null);
+        console.log(ansi.green('✓') + ` ${key} unset`);
+      } catch (err) {
+        console.error(ansi.red('error: ') + err.message);
+        process.exitCode = 1;
+      }
+    });
+
+  cfgCmd
+    .command('path')
+    .description('Print the absolute path of the global config file.')
+    .action(async () => {
+      const { CONFIG_FILE_PATH } = await import('./commands/config.js');
+      console.log(CONFIG_FILE_PATH);
     });
 
   // -------------------------------------------------------------------------

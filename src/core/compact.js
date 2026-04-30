@@ -27,43 +27,12 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { summarizeFile } from './parser.js';
+import { walkProject } from './walk.js';
 
 const COMPACT_DIR = '.context-compact';
 const MAP_FILE = 'project-map.md';
 const UNASSIGNED_BRANCH = '_unassigned';
 const DEFAULT_MAP_FILES_PER_BRANCH = 10;
-
-// Dirs we never walk into.
-const IGNORED_DIRS = new Set([
-  '.git',
-  'node_modules',
-  'dist',
-  'build',
-  '.next',
-  '.nuxt',
-  '.svelte-kit',
-  'coverage',
-  '.turbo',
-  '.vercel',
-  '.cache',
-  '.context-compact',
-  '.claude',
-  '__pycache__',
-  '.pytest_cache',
-  '.mypy_cache',
-  'vendor',
-  'target',
-  'bin',
-  'obj',
-]);
-
-const IGNORED_FILES = new Set([
-  'package-lock.json',
-  'pnpm-lock.yaml',
-  'yarn.lock',
-  '.DS_Store',
-  'Thumbs.db',
-]);
 
 /**
  * @typedef {Object} BranchConfig
@@ -88,19 +57,23 @@ const IGNORED_FILES = new Set([
  * @param {BranchConfig[]} options.branches
  * @param {number} [options.mapFilesPerBranch]
  * @param {import('./tasks.js').Task[]} [options.tasks]
+ * @param {string[]} [options.ignoredPaths]   Extra dir basenames to skip
+ *                                            (typically from compact_context.ignored_paths).
  * @returns {Promise<RefreshResult>}
  */
 export async function refreshCompactContext(projectRoot, options) {
   const branches = options.branches ?? [];
   const mapFilesPerBranch = options.mapFilesPerBranch ?? DEFAULT_MAP_FILES_PER_BRANCH;
   const tasks = options.tasks ?? [];
+  const extraIgnoredDirs = options.ignoredPaths ?? [];
   /** @type {string[]} */
   const warnings = [];
 
   // 1. Walk + summarize every file.
-  const allFiles = await walkProject(projectRoot);
+  const walkResult = await walkProject(projectRoot, { extraIgnoredDirs });
+  for (const w of walkResult.warnings) warnings.push(w);
   const summaries = await Promise.all(
-    allFiles.map((absPath) => summarizeFile(absPath, projectRoot)),
+    walkResult.files.map((absPath) => summarizeFile(absPath, projectRoot)),
   );
 
   // 2. Classify files into branches (most-specific wins).
@@ -207,44 +180,6 @@ export async function refreshCompactContext(projectRoot, options) {
     unassignedCount: unassigned.length,
     warnings,
   };
-}
-
-// ---------------------------------------------------------------------------
-// File walking
-// ---------------------------------------------------------------------------
-
-async function walkProject(root) {
-  /** @type {string[]} */
-  const result = [];
-
-  async function walk(dir) {
-    let entries;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      if (entry.name.startsWith('.')) {
-        // Ignore dotdirs (covered by IGNORED_DIRS) and dotfiles.
-        if (entry.isDirectory() && !IGNORED_DIRS.has(entry.name)) {
-          // Still skip — dot-dirs are almost always tooling/config.
-        }
-        continue;
-      }
-      if (entry.isDirectory()) {
-        if (IGNORED_DIRS.has(entry.name)) continue;
-        await walk(path.join(dir, entry.name));
-      } else if (entry.isFile()) {
-        if (IGNORED_FILES.has(entry.name)) continue;
-        result.push(path.join(dir, entry.name));
-      }
-    }
-  }
-
-  await walk(root);
-  return result;
 }
 
 // ---------------------------------------------------------------------------

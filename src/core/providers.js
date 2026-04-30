@@ -15,7 +15,7 @@
  *     we treat it as "no local models" and move on.
  */
 
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
@@ -161,12 +161,58 @@ export async function listOllamaModels() {
  */
 export async function installOllama(platform) {
   if (platform === 'win32') {
-    return {
-      ok: false,
-      message:
-        'On Windows, please download Ollama manually from https://ollama.com/download. ' +
-        'After installing, re-run this wizard.',
-    };
+    // Official PowerShell installer from ollama.com.
+    // Equivalent of: irm https://ollama.com/install.ps1 | iex
+    // We invoke PowerShell directly with the same one-liner. It installs
+    // in the user's profile (no admin required) and adds Ollama to PATH
+    // for the user. The new PATH won't be visible in the current terminal —
+    // the user has to open a new terminal.
+    //
+    // ExecutionPolicy Bypass is needed because by default many corporate /
+    // fresh Windows installs disallow remote scripts. -NoProfile speeds up
+    // startup; -NonInteractive prevents prompts that would hang storm.
+    //
+    // We use spawn (not exec) so the user sees the installer's progress
+    // bar in real time — the download is ~150MB and exec would buffer
+    // silently for a couple of minutes.
+    return new Promise((resolve) => {
+      const proc = spawn(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy', 'Bypass',
+          '-Command', 'irm https://ollama.com/install.ps1 | iex',
+        ],
+        { stdio: 'inherit', windowsHide: true },
+      );
+      proc.on('exit', (code) => {
+        if (code === 0) {
+          resolve({
+            ok: true,
+            message:
+              'Ollama instalado. Cerrá y reabrí la terminal para que ' +
+              'el comando ollama esté disponible.',
+          });
+        } else {
+          resolve({
+            ok: false,
+            message:
+              `El instalador terminó con código ${code}.\n` +
+              'Si querés probar manualmente, descargá el .exe desde ' +
+              'https://ollama.com/download',
+          });
+        }
+      });
+      proc.on('error', (err) => {
+        resolve({
+          ok: false,
+          message:
+            `No pude correr powershell.exe: ${err.message}\n` +
+            'Descargá Ollama manualmente desde https://ollama.com/download',
+        });
+      });
+    });
   }
 
   // macOS + Linux share the same install script.
@@ -194,7 +240,6 @@ export async function installOllama(platform) {
  * @returns {Promise<{ok: boolean, message?: string}>}
  */
 export async function pullOllamaModel(modelName) {
-  const { spawn } = await import('node:child_process');
   return new Promise((resolve) => {
     const proc = spawn('ollama', ['pull', modelName], {
       stdio: 'inherit',

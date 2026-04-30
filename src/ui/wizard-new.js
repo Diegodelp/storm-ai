@@ -26,6 +26,33 @@ import * as ansi from './ansi.js';
 export async function runNewWizard({ cwd }) {
   clack.intro(ansi.bold('Nuevo proyecto'));
 
+  // Step 0: ¿desde template o desde cero?
+  const startMode = await clack.select({
+    message: '¿Cómo querés arrancar?',
+    options: [
+      {
+        value: 'template',
+        label: 'Desde un template',
+        hint: 'Proyectos pre-armados (Next.js SaaS, etc) — listos para extender',
+      },
+      {
+        value: 'scratch',
+        label: 'Desde cero',
+        hint: 'Wizard manual: vos definís stack, ramas, agentes',
+      },
+    ],
+    initialValue: 'template',
+  });
+  if (clack.isCancel(startMode)) return cancel();
+
+  if (startMode === 'template') {
+    const { runNewFromTemplateWizard } = await import('./wizard-new-template.js');
+    const result = await runNewFromTemplateWizard({ cwd });
+    if (result === 'done' || result === 'cancelled') return;
+    // 'fallback' (registry vacío) cae al wizard from-scratch que sigue.
+    clack.log.info('Continuando con el wizard desde cero.');
+  }
+
   const name = await clack.text({
     message: 'Nombre del proyecto',
     placeholder: 'mi-proyecto',
@@ -183,6 +210,26 @@ export async function runNewWizard({ cwd }) {
     if (!model) return cancel();
   }
 
+  // ---- Agent (CLI) ----
+  const { AGENTS, getAgent } = await import('../core/agents.js');
+  const { getDefaultAgent } = await import('../core/global-config.js');
+  const defaultAgentId = await getDefaultAgent();
+
+  const agentChoice = await clack.select({
+    message: '¿Qué CLI vas a usar?',
+    options: [
+      ...AGENTS.map((a) => ({ value: a.id, label: a.label, hint: a.hint })),
+      { value: '__custom__', label: 'Otro... (configurar después con `storm config`)' },
+    ],
+    initialValue: defaultAgentId,
+  });
+  if (clack.isCancel(agentChoice)) return cancel();
+
+  const agentId = agentChoice === '__custom__' ? defaultAgentId : agentChoice;
+  const agentLabel = agentChoice === '__custom__'
+    ? 'custom (definí con `storm config`)'
+    : (getAgent(agentId)?.label ?? agentId);
+
   // ---- Resumen + confirmación ----
   const summary = [
     `Nombre:       ${ansi.cyan(name)}`,
@@ -193,6 +240,7 @@ export async function runNewWizard({ cwd }) {
     (pickedSkills ?? []).length ? `Skills:       ${pickedSkills.join(', ')}` : null,
     agents.length ? `Agentes:      ${agents.map((a) => a.name).join(', ')}` : null,
     `Proveedor:    ${providerLabel(providerChoice)}${model.name ? ` (${model.name})` : ''}`,
+    `CLI:          ${agentLabel}`,
     `Carpeta base: ${ansi.dim(cwd)}`,
   ].filter(Boolean).join('\n');
   clack.note(summary, 'Se va a crear');
@@ -220,6 +268,7 @@ export async function runNewWizard({ cwd }) {
       skills: (pickedSkills ?? []).map((s) => ({ name: s })),
       agents,
       model,
+      agent: agentId,
     });
     spinner.stop('Proyecto creado');
   } catch (err) {
