@@ -22,8 +22,9 @@ import { install as installCmd } from '../commands/install.js';
 import { pick } from './picker.js';
 import * as ansi from './ansi.js';
 import { centerLine, centerBlock, termWidth, termHeight, horizontalRule } from './layout.js';
+import { getVersion } from '../core/version.js';
 
-const VERSION = '0.1.0';
+const VERSION = getVersion();
 
 function moveCursor(row, col = 1) {
   process.stdout.write(`\x1b[${row};${col}H`);

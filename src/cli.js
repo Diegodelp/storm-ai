@@ -31,8 +31,7 @@ import { runNewWizard } from './ui/wizard-new.js';
 import { runSkillAddWizard } from './ui/wizard-skill.js';
 import { runImportWizard } from './ui/wizard-import.js';
 import * as ansi from './ui/ansi.js';
-
-const VERSION = '0.1.0';
+import { getVersion } from './core/version.js';
 
 export async function runCli(argv) {
   // No args → interactive menu. This is the entry point for most users.
@@ -44,7 +43,7 @@ export async function runCli(argv) {
   program
     .name('storm')
     .description('Context-aware project scaffolding for AI coding agents.')
-    .version(VERSION)
+    .version(getVersion())
     .showHelpAfterError();
 
   // -------------------------------------------------------------------------

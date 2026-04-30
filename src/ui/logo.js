@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import * as ansi from './ansi.js';
+import { getVersion } from '../core/version.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,10 +70,17 @@ export async function renderLogo() {
 }
 
 /**
- * Renders the STORM footer line ("STORM CLI  v0.1.0  |  https://...").
+ * Renders the STORM footer line ("STORM CLI  v0.2.3  |  https://...").
+ *
+ * If no `version` is passed in, reads it from package.json at runtime
+ * via getVersion(). The repo URL also has a sane default.
  */
-export function renderFooter({ version = '0.1.0', url = 'https://github.com/diegobelotti/storm-ai' } = {}) {
-  const left = `${ansi.cyan('STORM CLI')}  ${ansi.dim('v' + version)}`;
+export function renderFooter({
+  version,
+  url = 'https://github.com/Diegodelp/storm-ai',
+} = {}) {
+  const v = version ?? getVersion();
+  const left = `${ansi.cyan('STORM CLI')}  ${ansi.dim('v' + v)}`;
   const right = ansi.violet(url);
   return `${left}  ${ansi.dim('|')}  ${right}`;
 }
