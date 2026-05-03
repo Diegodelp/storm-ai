@@ -204,9 +204,28 @@ function validateAndNormalize(raw) {
     throw new ConfigError('`launch.customCommand` must be a string.');
   }
 
-  config.model ??= { provider: 'claude-code', name: null };
-  if (typeof config.model !== 'object') {
+  // model: normalizar shape. El campo correcto es `name`, pero algunos
+  // tools (LLMs alucinando, configs viejas) escriben `model` en su lugar.
+  // Aceptamos ambos al leer; al escribir siempre normalizamos a `name`.
+  config.model ??= { provider: 'claude', name: null };
+  if (typeof config.model !== 'object' || config.model === null) {
     throw new ConfigError('`model` must be an object.');
+  }
+  if (typeof config.model.provider !== 'string' || !config.model.provider.trim()) {
+    throw new ConfigError(
+      '`model.provider` is required and must be a string ' +
+        '(e.g. "ollama-cloud", "ollama-local", "claude").',
+    );
+  }
+  // Si vino con la clave incorrecta `model`, la migramos a `name` y la borramos.
+  if (config.model.name === undefined && typeof config.model.model === 'string') {
+    config.model.name = config.model.model;
+    delete config.model.model;
+  }
+  // Defaults para que el shape final sea consistente.
+  if (config.model.name === undefined) config.model.name = null;
+  if (config.model.name !== null && typeof config.model.name !== 'string') {
+    throw new ConfigError('`model.name` must be a string or null.');
   }
 
   config.skills = normalizeSkills(config.skills);

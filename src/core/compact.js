@@ -163,15 +163,28 @@ export async function refreshCompactContext(projectRoot, options) {
   });
 
   // 7. Surface parse errors as non-fatal warnings.
+  // By default we show the count + first 3 paths to keep the warning short.
+  // Set STORM_DEBUG=1 to dump every failure with its full error message —
+  // useful when an agent is debugging why exports look incomplete.
   const parseFailures = summaries.filter((s) => s.parseError);
   if (parseFailures.length > 0) {
-    warnings.push(
-      `${parseFailures.length} file(s) failed to parse ` +
-        `(exports may be missing): ${parseFailures
-          .slice(0, 3)
-          .map((s) => s.relativePath)
-          .join(', ')}${parseFailures.length > 3 ? ', ...' : ''}`,
-    );
+    if (process.env.STORM_DEBUG) {
+      warnings.push(
+        `${parseFailures.length} file(s) failed to parse (exports may be missing). Full list:\n` +
+          parseFailures
+            .map((s) => `  - ${s.relativePath}\n      ${s.parseError}`)
+            .join('\n'),
+      );
+    } else {
+      warnings.push(
+        `${parseFailures.length} file(s) failed to parse ` +
+          `(exports may be missing): ${parseFailures
+            .slice(0, 3)
+            .map((s) => s.relativePath)
+            .join(', ')}${parseFailures.length > 3 ? ', ...' : ''}` +
+          (parseFailures.length > 3 ? '. Set STORM_DEBUG=1 for the full list.' : ''),
+      );
+    }
   }
 
   return {

@@ -181,3 +181,80 @@ test('writeImport: built-in slash commands are written', async () => {
     await cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// First refresh after import must use the declared branches.
+// Reproduces an OpenCode-reported bug: project-map.md came back with
+// every file in `_unassigned` because writeImport was calling
+// refreshCompactContext without passing branches.
+// ---------------------------------------------------------------------------
+
+test('writeImport: first compact context uses declared branches (no _unassigned dump)', async () => {
+  const { dir, cleanup } = await tmpProject(async (d) => {
+    // A small Next.js Pages Router-ish layout.
+    await mkdir(path.join(d, 'pages/api'), { recursive: true });
+    await mkdir(path.join(d, 'components'), { recursive: true });
+    await writeFile(path.join(d, 'package.json'), '{"name":"foo"}');
+    await writeFile(path.join(d, 'pages/index.js'), 'export default function Home() { return null; }');
+    await writeFile(path.join(d, 'pages/api/users.js'), 'export default (req, res) => res.json([]);');
+    await writeFile(path.join(d, 'components/Navbar.js'), 'export const Navbar = () => null;');
+  });
+  try {
+    await writeImport({
+      projectRoot: dir,
+      name: 'next-app',
+      description: '',
+      stackId: 'nextjs-pages',
+      databaseId: 'none',
+      model: { provider: 'claude', name: null },
+      branches: [
+        { path: 'pages',         description: 'Page routes' },
+        { path: 'pages/api',     description: 'API routes' },
+        { path: 'components',    description: 'UI components' },
+      ],
+      skills: [],
+      agents: [],
+    });
+
+    // The project-map.md should now mention the declared branches.
+    const mapPath = path.join(dir, '.context-compact', 'project-map.md');
+    const map = await readFile(mapPath, 'utf8');
+    assert.match(map, /pages\/api/, 'expected pages/api branch in map');
+    assert.match(map, /components/,  'expected components branch in map');
+
+    // Crucially: it should NOT be a "everything in _unassigned" dump.
+    // We accept some _unassigned (lockfiles etc) but not as the only branch.
+    const onlyUnassigned =
+      /Branches:\s*1\b/.test(map) && /_unassigned/.test(map);
+    assert.equal(onlyUnassigned, false,
+      'project-map collapsed to a single _unassigned branch — refresh did not use declared branches');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('writeImport: model shape is { provider, name }, not { provider, model }', async () => {
+  const { dir, cleanup } = await tmpProject();
+  try {
+    await writeImport({
+      projectRoot: dir,
+      name: 'foo',
+      description: '',
+      stackId: 'other',
+      databaseId: 'none',
+      model: { provider: 'ollama-cloud', name: 'kimi-k2.6:cloud' },
+      branches: [],
+      skills: [],
+      agents: [],
+    });
+
+    const cfg = JSON.parse(await readFile(path.join(dir, 'project.config.json'), 'utf8'));
+    assert.equal(cfg.model.provider, 'ollama-cloud');
+    assert.equal(cfg.model.name, 'kimi-k2.6:cloud');
+    // The wrong key must NOT be there.
+    assert.equal(cfg.model.model, undefined,
+      'project.config.json wrote the legacy `model.model` key');
+  } finally {
+    await cleanup();
+  }
+});

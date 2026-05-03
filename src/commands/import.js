@@ -24,6 +24,7 @@ import { refreshCompactContext } from '../core/compact.js';
 import { writeState, regenerateTasksMd } from '../core/tasks.js';
 import { projectPaths } from '../core/paths.js';
 import { getStack, getDatabase } from '../core/stacks.js';
+import { getDefaultProvider, getDefaultAgent } from '../core/global-config.js';
 
 /**
  * @typedef {Object} AnalyzeArgs
@@ -67,6 +68,7 @@ export async function analyzeForImport(args) {
  * @property {string} stackId
  * @property {string} databaseId
  * @property {{provider: string, name: string|null}} model
+ * @property {string} [agent]                  CLI agent id. Default: global default.
  * @property {Array<{path: string, description?: string}>} branches
  * @property {Array<{name: string, builtin?: boolean, description?: string}>} skills
  * @property {Array<{name: string, slash: string, description?: string}>} agents
@@ -151,6 +153,9 @@ export async function writeImport(plan) {
     }));
   const allSkills = [...builtinSkills, ...customSkills];
 
+  // Resolve which agent to use: explicit plan.agent > global default > 'claude-code'.
+  const resolvedAgent = plan.agent ?? (await getDefaultAgent());
+
   const config = createConfig({
     name: plan.name,
     description: plan.description,
@@ -159,6 +164,7 @@ export async function writeImport(plan) {
     database: dbPreset?.label ?? '',
     databaseId: plan.databaseId,
     model: plan.model,
+    agent: resolvedAgent,
     skills: allSkills,
     agents: (plan.agents ?? []).map((a) => ({
       name: a.name,
@@ -239,8 +245,19 @@ export async function writeImport(plan) {
   await writeBuiltinCommands(plan.projectRoot, result);
 
   // Generate compact context for the project.
+  // CRITICAL: pass branches/mapFilesPerBranch/ignoredPaths from the config
+  // we just wrote. If we don't, refreshCompactContext defaults to "no
+  // branches", every file lands in `_unassigned`, and the user's first
+  // impression of the project-map.md is broken until they manually run
+  // `storm refresh`.
   try {
-    await refreshCompactContext(plan.projectRoot, { resetCounter: false });
+    const stateForRefresh = await readState(plan.projectRoot);
+    await refreshCompactContext(plan.projectRoot, {
+      branches: config.compact_context.branches,
+      mapFilesPerBranch: config.compact_context.map_files_per_branch,
+      ignoredPaths: config.compact_context.ignored_paths ?? [],
+      tasks: stateForRefresh.tasks ?? [],
+    });
   } catch (err) {
     result.warnings.push(`Falló la generación de .context-compact: ${err.message}`);
   }
@@ -418,4 +435,173 @@ async function writeBuiltinCommands(projectRoot, result) {
     await writeFile(file, content, 'utf8');
     result.createdFiles.push(`.claude/commands/${name}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Non-interactive entrypoint
+//
+// `storm import` is normally a wizard, but agents and CI need a way to
+// invoke it programmatically. This function does the same pipeline
+// (scan + LLM analyze + write) without ever calling clack.
+//
+// All inputs come from CLI flags. If a flag is missing, we use sensible
+// defaults; if a critical flag is missing AND there's no global default,
+// we throw a clear error.
+// ---------------------------------------------------------------------------
+
+/**
+ * @typedef {Object} NonInteractiveImportInput
+ * @property {string} cwd                               Project directory.
+ * @property {'shallow'|'deep'} [mode]                  Default 'shallow'.
+ * @property {string} [provider]                        Override global default.
+ * @property {string|null} [model]                      Override global default.
+ * @property {string} [agent]                           Override global default.
+ * @property {string} [name]                            Project name (default: dir basename).
+ * @property {string} [description]
+ * @property {string} [stack]                           Stack id (e.g. 'nextjs-pages').
+ * @property {string} [db]                              Database id.
+ * @property {string[]} [extraBranches]                 Branches to add on top of LLM suggestions.
+ * @property {string[]} [skills]                        Skill names to scaffold.
+ * @property {string[]} [agentNames]                    Agent files to scaffold.
+ * @property {boolean} [yes]                            Auto-confirm overwrites.
+ * @property {boolean} [skipLLM]                        Don't call the LLM, use defaults.
+ * @property {(msg: string) => void} [log]              Optional logger (default: console.log).
+ */
+
+/**
+ * @param {NonInteractiveImportInput} input
+ * @returns {Promise<{
+ *   projectRoot: string,
+ *   createdFiles: string[],
+ *   skippedFiles: string[],
+ *   warnings: string[],
+ *   analysis?: import('../core/parse-analysis.js').AnalysisResult,
+ * }>}
+ */
+export async function runImportNonInteractive(input) {
+  const log = input.log ?? ((m) => console.log(m));
+  const projectRoot = path.resolve(input.cwd);
+
+  // Resolve provider + model from flags or global defaults.
+  let provider = input.provider;
+  let model = input.model ?? null;
+  if (!provider) {
+    const def = await getDefaultProvider();
+    if (!def) {
+      throw new Error(
+        'No provider configured. Pass --provider or set a default with `storm config`.',
+      );
+    }
+    provider = def.provider;
+    if (model === null && def.model) model = def.model;
+  }
+
+  // Resolve agent.
+  const agent = input.agent ?? (await getDefaultAgent());
+
+  // Run analysis (or skip with defaults).
+  /** @type {import('../core/parse-analysis.js').AnalysisResult | null} */
+  let analysis = null;
+  if (input.skipLLM) {
+    log('Skipping LLM analysis (--skip-llm).');
+  } else {
+    log(`Analizando proyecto con ${provider}${model ? ' (' + model + ')' : ''}...`);
+    try {
+      const r = await analyzeForImport({
+        cwd: projectRoot,
+        mode: input.mode ?? 'shallow',
+        provider,
+        model,
+      });
+      analysis = r.analysis;
+      log(`✓ Análisis completo. Stack: ${analysis.stackId}, ` +
+          `${analysis.branches.length} branches sugeridas.`);
+    } catch (err) {
+      log(`⚠ Análisis falló: ${err.message}. Continuando con defaults.`);
+    }
+  }
+
+  // Build the plan. Flags override LLM analysis, both override defaults.
+  const name = (input.name ?? analysis?.name ?? path.basename(projectRoot)).trim();
+  const description = input.description ?? analysis?.description ?? '';
+  const stackId = input.stack ?? analysis?.stackId ?? 'other';
+  const databaseId = input.db ?? analysis?.databaseId ?? 'other';
+
+  // Merge branches from THREE sources, in priority order:
+  //   1. LLM analysis (high quality, project-specific)
+  //   2. Stack preset's initialBranches (covers gaps the LLM missed —
+  //      e.g. Next.js pages router LLM often forgets `pages` itself)
+  //   3. --branch flags from the user
+  // Only include branches whose directory actually exists.
+  const stackPresetForBranches = getStack(stackId);
+  const branchPaths = new Set();
+  const branches = [];
+
+  for (const b of analysis?.branches ?? []) {
+    const p = b.path.trim();
+    if (!p || branchPaths.has(p)) continue;
+    branchPaths.add(p);
+    branches.push({ path: p, description: b.description });
+  }
+
+  for (const p of stackPresetForBranches?.initialBranches ?? []) {
+    if (branchPaths.has(p)) continue;
+    // Only add if the directory actually exists in the project.
+    if (await pathExists(path.join(projectRoot, p))) {
+      branchPaths.add(p);
+      const hint = stackPresetForBranches.branchHints?.find((h) => h.path === p);
+      branches.push({
+        path: p,
+        description: hint?.description ?? '',
+      });
+    }
+  }
+
+  for (const p of input.extraBranches ?? []) {
+    const trimmed = p.trim();
+    if (!trimmed || branchPaths.has(trimmed)) continue;
+    branchPaths.add(trimmed);
+    branches.push({ path: trimmed });
+  }
+
+  // Skills / agents from flags only (LLM suggestions are skipped here —
+  // we don't want to surprise the user with new skills they didn't ask for).
+  const skills = (input.skills ?? []).map((n) => ({ name: n.trim() })).filter((s) => s.name);
+  const agents = (input.agentNames ?? []).map((n) => ({
+    name: n.trim(),
+    slash: n.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
+  })).filter((a) => a.name);
+
+  // Detect conflicts. With --yes we overwrite; without it we preserve.
+  const conflicts = await detectConflicts(projectRoot);
+  const overrides = {
+    overwriteClaudeMd: input.yes ? true : !conflicts.claudeMd,
+    overwriteConfig:   input.yes ? true : !conflicts.config,
+    overwriteTasks:    input.yes ? true : !conflicts.tasks,
+  };
+
+  log('Aplicando scaffolding...');
+  const result = await writeImport({
+    projectRoot,
+    name,
+    description,
+    stackId,
+    databaseId,
+    model: { provider, name: model },
+    agent,
+    branches,
+    skills,
+    agents,
+    ...overrides,
+  });
+
+  log(`✓ ${result.createdFiles.length} archivo(s) creado(s).`);
+  if (result.skippedFiles.length) {
+    log(`! ${result.skippedFiles.length} archivo(s) preservado(s) (existían — usá --yes para pisar).`);
+  }
+  for (const w of result.warnings) {
+    log(`⚠ ${w}`);
+  }
+
+  return { ...result, analysis };
 }
