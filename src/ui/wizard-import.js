@@ -26,6 +26,7 @@ import {
   detectOllama,
   CLOUD_MODELS,
   LOCAL_RECOMMENDED,
+  PROVIDERS,
 } from '../core/providers.js';
 import { STACKS, DATABASES, getStack, getDatabase } from '../core/stacks.js';
 import * as ansi from './ansi.js';
@@ -280,18 +281,24 @@ export async function runImportWizard(input) {
 async function askProvider() {
   const providerChoice = await clack.select({
     message: 'Primer uso. ¿Qué proveedor de IA querés usar?',
-    options: [
-      { value: 'ollama-cloud', label: 'Ollama (cloud)', hint: 'Gratis, calidad Claude. Recomendado.' },
-      { value: 'ollama-local', label: 'Ollama (local)', hint: 'Corre en tu máquina.' },
-      { value: 'claude',       label: 'Claude API',     hint: 'Requiere ANTHROPIC_API_KEY.' },
-    ],
+    options: PROVIDERS.map((p) => ({
+      value: p.id,
+      label: p.label,
+      hint: p.hint,
+    })),
     initialValue: 'ollama-cloud',
   });
   if (clack.isCancel(providerChoice)) return null;
 
-  if (providerChoice === 'claude') {
-    return { provider: 'claude', model: null };
+  // Providers without a model picker — they pick the model themselves
+  // (Anthropic env default for 'claude'; the underlying CLI's config for
+  // 'via-claude-code' and 'via-opencode').
+  if (providerChoice === 'claude' ||
+      providerChoice === 'via-claude-code' ||
+      providerChoice === 'via-opencode') {
+    return { provider: providerChoice, model: null };
   }
+
   if (providerChoice === 'ollama-cloud') {
     const m = await clack.select({
       message: 'Modelo cloud',

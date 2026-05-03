@@ -18,7 +18,7 @@ import {
   resetConfig,
   CONFIG_FILE_PATH,
 } from '../commands/config.js';
-import { CLOUD_MODELS, LOCAL_RECOMMENDED, detectOllama } from '../core/providers.js';
+import { CLOUD_MODELS, LOCAL_RECOMMENDED, detectOllama, PROVIDERS } from '../core/providers.js';
 import { AGENTS, detectAgent, installAgent } from '../core/agents.js';
 import * as ansi from './ansi.js';
 import { platform } from 'node:os';
@@ -95,10 +95,8 @@ async function editProvider() {
   const provider = await clack.select({
     message: 'Provider (Esc para volver)',
     options: [
-      { value: 'ollama-cloud', label: 'Ollama (cloud)', hint: 'Modelos hosteados, gratis con login' },
-      { value: 'ollama-local', label: 'Ollama (local)', hint: 'Modelos en tu máquina' },
-      { value: 'claude',       label: 'Claude API',     hint: 'Anthropic, requiere ANTHROPIC_API_KEY' },
-      { value: BACK,           label: '← Volver' },
+      ...PROVIDERS.map((p) => ({ value: p.id, label: p.label, hint: p.hint })),
+      { value: BACK, label: '← Volver' },
     ],
   });
   if (clack.isCancel(provider) || provider === BACK) return;
@@ -146,7 +144,12 @@ async function editProvider() {
       model = choice;
     }
   } else {
-    // Claude API: no model picker (CLI decides).
+    // Providers without a model picker:
+    //   - 'claude'           → API call uses Anthropic's default model (env-controlled).
+    //   - 'via-claude-code'  → delegates to `claude` CLI; model is whatever the user
+    //                          configured inside Claude Code.
+    //   - 'via-opencode'     → delegates to `opencode` CLI; model is whatever the user
+    //                          configured inside OpenCode (incl. ChatGPT Pro via web auth).
     model = null;
   }
 

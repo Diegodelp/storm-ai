@@ -25,6 +25,7 @@ import { writeState, regenerateTasksMd } from '../core/tasks.js';
 import { projectPaths } from '../core/paths.js';
 import { getStack, getDatabase } from '../core/stacks.js';
 import { getDefaultProvider, getDefaultAgent } from '../core/global-config.js';
+import { sync } from './sync.js';
 
 /**
  * @typedef {Object} AnalyzeArgs
@@ -90,15 +91,19 @@ export async function analyzeForImport(args) {
  * showing confirm prompts, so it can ask the user per-file.
  *
  * @param {string} projectRoot
- * @returns {Promise<{claudeMd: boolean, config: boolean, tasks: boolean, contextDir: boolean, claudeDir: boolean}>}
+ * @returns {Promise<{claudeMd: boolean, config: boolean, tasks: boolean, contextDir: boolean, claudeDir: boolean, opencodeDir: boolean, agentsMd: boolean}>}
  */
 export async function detectConflicts(projectRoot) {
   return {
-    claudeMd:   await pathExists(path.join(projectRoot, 'CLAUDE.md')),
-    config:     await pathExists(path.join(projectRoot, 'project.config.json')),
-    tasks:      await pathExists(path.join(projectRoot, 'TASKS.md')),
-    contextDir: await pathExists(projectPaths.compactDir(projectRoot)),
-    claudeDir:  await pathExists(path.join(projectRoot, '.claude')),
+    claudeMd:    await pathExists(path.join(projectRoot, 'CLAUDE.md')),
+    config:      await pathExists(path.join(projectRoot, 'project.config.json')),
+    tasks:       await pathExists(path.join(projectRoot, 'TASKS.md')),
+    contextDir:  await pathExists(projectPaths.compactDir(projectRoot)),
+    claudeDir:   await pathExists(path.join(projectRoot, '.claude')),
+    opencodeDir: await pathExists(path.join(projectRoot, '.opencode')),
+    // .opencode/AGENTS.md is the equivalent of CLAUDE.md for OpenCode users.
+    agentsMd:    await pathExists(path.join(projectRoot, '.opencode/AGENTS.md')) ||
+                 await pathExists(path.join(projectRoot, 'AGENTS.md')),
   };
 }
 
@@ -117,11 +122,11 @@ export async function writeImport(plan) {
     warnings: [],
   };
 
-  // Make sure the target dirs exist (no-ops if they do).
+  // Make sure the target dirs exist. The compact dir is always needed
+  // (storm's universal output). The .claude/ subtree is only needed for
+  // the claude-code agent — creating it for opencode would leave empty
+  // dirs that confuse OpenCode's project scanner.
   await mkdir(projectPaths.compactDir(plan.projectRoot), { recursive: true });
-  await mkdir(projectPaths.claudeCommands(plan.projectRoot), { recursive: true });
-  await mkdir(projectPaths.claudeSkills(plan.projectRoot), { recursive: true });
-  await mkdir(projectPaths.claudeAgents(plan.projectRoot), { recursive: true });
 
   const stackPreset = getStack(plan.stackId);
   const dbPreset = getDatabase(plan.databaseId);
@@ -156,6 +161,13 @@ export async function writeImport(plan) {
   // Resolve which agent to use: explicit plan.agent > global default > 'claude-code'.
   const resolvedAgent = plan.agent ?? (await getDefaultAgent());
 
+  // Create .claude/ subdirs only when the user actually uses claude-code.
+  if (resolvedAgent === 'claude-code') {
+    await mkdir(projectPaths.claudeCommands(plan.projectRoot), { recursive: true });
+    await mkdir(projectPaths.claudeSkills(plan.projectRoot), { recursive: true });
+    await mkdir(projectPaths.claudeAgents(plan.projectRoot), { recursive: true });
+  }
+
   const config = createConfig({
     name: plan.name,
     description: plan.description,
@@ -186,14 +198,19 @@ export async function writeImport(plan) {
     result.createdFiles.push('project.config.json');
   }
 
-  // Write CLAUDE.md.
-  const claudeMd = renderClaudeMd({ config });
+  // Write the agent instructions file. Filename + location depend on
+  // which agent the user picked (claude-code → CLAUDE.md at root,
+  // opencode → .opencode/AGENTS.md, anything else → AGENTS.md at root).
+  const agentMd = renderAgentMd({ config });
+  const agentMdPath = path.join(plan.projectRoot, agentMd.filename);
   if (plan.overwriteClaudeMd === false &&
-      (await pathExists(path.join(plan.projectRoot, 'CLAUDE.md')))) {
-    result.skippedFiles.push('CLAUDE.md');
+      (await pathExists(agentMdPath))) {
+    result.skippedFiles.push(agentMd.filename);
   } else {
-    await writeFile(path.join(plan.projectRoot, 'CLAUDE.md'), claudeMd, 'utf8');
-    result.createdFiles.push('CLAUDE.md');
+    // Ensure parent directory exists (for .opencode/ etc.).
+    await mkdir(path.dirname(agentMdPath), { recursive: true });
+    await writeFile(agentMdPath, agentMd.content, 'utf8');
+    result.createdFiles.push(agentMd.filename);
   }
 
   // Write task-state.json + TASKS.md.
@@ -229,20 +246,24 @@ export async function writeImport(plan) {
     result.createdFiles.push(`.claude/skills/${skill.name}.md`);
   }
 
-  // Write agent files.
-  for (const agent of config.agents) {
-    const file = path.join(projectPaths.claudeAgents(plan.projectRoot), `${agent.slash}.md`);
-    if (await pathExists(file)) {
-      result.skippedFiles.push(`.claude/agents/${agent.slash}.md`);
-      continue;
+  // Write agent files and built-in slash commands ONLY for claude-code.
+  // Other agents (opencode, custom) have different conventions; emitting
+  // .claude/ files into a non-claude-code project would be cargo-cult.
+  if (resolvedAgent === 'claude-code') {
+    for (const agent of config.agents) {
+      const file = path.join(projectPaths.claudeAgents(plan.projectRoot), `${agent.slash}.md`);
+      if (await pathExists(file)) {
+        result.skippedFiles.push(`.claude/agents/${agent.slash}.md`);
+        continue;
+      }
+      await writeFile(file, renderAgentTemplate(agent), 'utf8');
+      result.createdFiles.push(`.claude/agents/${agent.slash}.md`);
     }
-    await writeFile(file, renderAgentTemplate(agent), 'utf8');
-    result.createdFiles.push(`.claude/agents/${agent.slash}.md`);
-  }
 
-  // Built-in slash commands. These are always written (they're storm's
-  // own commands; the user shouldn't have hand-edited them).
-  await writeBuiltinCommands(plan.projectRoot, result);
+    // Built-in slash commands (always written for claude-code; they're
+    // storm's own commands and the user shouldn't have hand-edited them).
+    await writeBuiltinCommands(plan.projectRoot, result);
+  }
 
   // Generate compact context for the project.
   // CRITICAL: pass branches/mapFilesPerBranch/ignoredPaths from the config
@@ -260,6 +281,24 @@ export async function writeImport(plan) {
     });
   } catch (err) {
     result.warnings.push(`Falló la generación de .context-compact: ${err.message}`);
+  }
+
+  // Run sync once at the very end. The LLM + initialBranches don't always
+  // catch every branch worth tracking — for example, deeper directories
+  // like `pages/api/admin` only become obvious once you walk the filesystem.
+  // Sync does that walk, registers any new branches, and regenerates the
+  // compact context. Skipping this step would force the user to run
+  // `storm sync` manually right after import to get a complete picture.
+  try {
+    const syncReport = await sync({ cwd: plan.projectRoot, regenerate: true });
+    if (syncReport.added.length > 0) {
+      const names = syncReport.added.map((b) => b.path).join(', ');
+      result.warnings.push(
+        `Sync agregó ${syncReport.added.length} branch(es) detectada(s) en el filesystem: ${names}`,
+      );
+    }
+  } catch (err) {
+    result.warnings.push(`Sync post-import falló: ${err.message}`);
   }
 
   return result;
@@ -294,7 +333,27 @@ function slugify(s) {
     .replace(/^-+|-+$/g, '');
 }
 
-function renderClaudeMd({ config }) {
+/**
+ * Render the project's "agent instructions" markdown file.
+ *
+ * The content is mostly the same regardless of which agent the user
+ * picked — it documents the storm conventions, branches, skills, etc.
+ * The differences:
+ *   - The filename and on-disk location depends on the agent.
+ *   - The "How to work" intro names the agent the user is actually using.
+ *
+ * @param {Object} args
+ * @param {import('../core/config.js').ProjectConfig} args.config
+ * @param {string} [args.agentId]    'claude-code' | 'opencode' | other.
+ *                                    Defaults to config.agent.
+ * @returns {{ filename: string, content: string }}
+ *   - filename:  relative path inside projectRoot. Examples:
+ *                  'CLAUDE.md'                 (claude-code)
+ *                  '.opencode/AGENTS.md'        (opencode)
+ *                  'AGENTS.md'                  (anything else / custom)
+ */
+function renderAgentMd({ config, agentId }) {
+  const agent = agentId ?? config.agent ?? 'claude-code';
   const branches = config.compact_context.branches;
   const skills = config.skills;
   const agents = config.agents;
@@ -327,7 +386,16 @@ function renderClaudeMd({ config }) {
       stackPreset.branchPatterns.map((p) => `- \`${p}\``).join('\n') + '\n'
     : '';
 
-  return `# ${config.name}
+  // Filename / location depends on the agent. OpenCode looks for
+  // `.opencode/AGENTS.md` by convention; Claude Code reads `CLAUDE.md`
+  // from the project root; anything else gets a generic top-level
+  // `AGENTS.md` so a human or another tool can still find it.
+  const filename =
+    agent === 'opencode'    ? '.opencode/AGENTS.md' :
+    agent === 'claude-code' ? 'CLAUDE.md' :
+    'AGENTS.md';
+
+  const content = `# ${config.name}
 
 ${config.description || '_No project description yet._'}
 
@@ -339,7 +407,7 @@ ${config.database ? `## Database\n\n${config.database}\n` : ''}
 
 ## How to work in this project
 
-This project was imported with **storm-ai**. Before doing anything, read:
+This project was scaffolded with **storm-ai**. Before doing anything, read:
 
 1. \`.context-compact/project-map.md\` — high-level index of the codebase.
 2. \`TASKS.md\` — current task list with status.
@@ -373,6 +441,8 @@ ${agentLines}
 - **Never overwrite the "## Notes" section of a \`.context-compact/<branch>.md\` file.** Append only.
 - New directories should follow the stack's branch patterns above. Otherwise register them with \`storm branch add\`.
 `;
+
+  return { filename, content };
 }
 
 function renderSkillTemplate(skill) {
@@ -515,7 +585,7 @@ export async function runImportNonInteractive(input) {
       });
       analysis = r.analysis;
       log(`✓ Análisis completo. Stack: ${analysis.stackId}, ` +
-          `${analysis.branches.length} branches sugeridas.`);
+          `LLM sugirió ${analysis.branches.length} branch(es).`);
     } catch (err) {
       log(`⚠ Análisis falló: ${err.message}. Continuando con defaults.`);
     }
@@ -536,12 +606,14 @@ export async function runImportNonInteractive(input) {
   const stackPresetForBranches = getStack(stackId);
   const branchPaths = new Set();
   const branches = [];
+  const branchSources = { llm: 0, preset: 0, flags: 0 };
 
   for (const b of analysis?.branches ?? []) {
     const p = b.path.trim();
     if (!p || branchPaths.has(p)) continue;
     branchPaths.add(p);
     branches.push({ path: p, description: b.description });
+    branchSources.llm++;
   }
 
   for (const p of stackPresetForBranches?.initialBranches ?? []) {
@@ -554,6 +626,7 @@ export async function runImportNonInteractive(input) {
         path: p,
         description: hint?.description ?? '',
       });
+      branchSources.preset++;
     }
   }
 
@@ -562,6 +635,17 @@ export async function runImportNonInteractive(input) {
     if (!trimmed || branchPaths.has(trimmed)) continue;
     branchPaths.add(trimmed);
     branches.push({ path: trimmed });
+    branchSources.flags++;
+  }
+
+  // Honest summary of where each branch came from. Avoids the confusing
+  // "4 sugeridas" log that was followed by 5 actual branches.
+  const summaryParts = [];
+  if (branchSources.llm > 0)    summaryParts.push(`${branchSources.llm} del LLM`);
+  if (branchSources.preset > 0) summaryParts.push(`${branchSources.preset} del preset ${stackId}`);
+  if (branchSources.flags > 0)  summaryParts.push(`${branchSources.flags} de --branch`);
+  if (branches.length > 0) {
+    log(`✓ ${branches.length} branch(es) iniciales: ${summaryParts.join(', ')}.`);
   }
 
   // Skills / agents from flags only (LLM suggestions are skipped here —
@@ -573,9 +657,12 @@ export async function runImportNonInteractive(input) {
   })).filter((a) => a.name);
 
   // Detect conflicts. With --yes we overwrite; without it we preserve.
+  // Note: the field is still called `overwriteClaudeMd` for backwards
+  // compat, but it covers any agent instructions file (CLAUDE.md,
+  // .opencode/AGENTS.md, AGENTS.md) since only one is written per project.
   const conflicts = await detectConflicts(projectRoot);
   const overrides = {
-    overwriteClaudeMd: input.yes ? true : !conflicts.claudeMd,
+    overwriteClaudeMd: input.yes ? true : !(conflicts.claudeMd || conflicts.agentsMd),
     overwriteConfig:   input.yes ? true : !conflicts.config,
     overwriteTasks:    input.yes ? true : !conflicts.tasks,
   };

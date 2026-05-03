@@ -43,11 +43,20 @@ export const IGNORED_DIRS = new Set([
 ]);
 
 export const IGNORED_FILES = new Set([
+  // Lockfiles — large, opaque, no useful exports.
   'package-lock.json',
   'pnpm-lock.yaml',
   'yarn.lock',
+  // OS junk
   '.DS_Store',
   'Thumbs.db',
+  // Storm's own scaffolding files. These are not project source; they're
+  // metadata storm itself manages. If we walked them, they'd land in
+  // _unassigned forever and the warning "5 files in _unassigned" would
+  // be permanently noisy on every refresh.
+  'CLAUDE.md',
+  'TASKS.md',
+  'project.config.json',
 ]);
 
 /** Hard cap on directory recursion depth. Catches symlink loops. */
@@ -69,11 +78,44 @@ export async function walkProject(root, options = {}) {
   /** @type {string[]} */
   const warnings = [];
 
-  // Compose the full set of ignored dir basenames.
+  // Compose the full set of ignored patterns.
+  // We split the user's `extraIgnoredDirs` into three buckets so the walker
+  // can apply them with the right semantics:
+  //   - dirs:     basenames to skip recursively (e.g. 'node_modules')
+  //   - files:    exact filenames to skip (e.g. '.env.local')
+  //   - patterns: wildcard patterns matched against basenames (e.g. '*.pem')
+  // This keeps the cheap lookup in the hot path (Set#has) and the regex
+  // check only runs against entries we couldn't dispatch by name.
   const allIgnoredDirs = new Set(IGNORED_DIRS);
-  for (const p of options.extraIgnoredDirs ?? []) {
-    const base = p.replace(/[\\/]/g, '/').split('/').pop();
-    if (base) allIgnoredDirs.add(base);
+  const allIgnoredFiles = new Set(IGNORED_FILES);
+  /** @type {RegExp[]} */
+  const ignoredPatterns = [];
+  for (const raw of options.extraIgnoredDirs ?? []) {
+    const trimmed = String(raw).trim();
+    if (!trimmed) continue;
+    if (trimmed.includes('*') || trimmed.includes('?')) {
+      // Wildcard pattern. Match against the basename only.
+      const escaped = trimmed
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '[^/]*')
+        .replace(/\?/g, '.');
+      ignoredPatterns.push(new RegExp('^' + escaped + '$'));
+      continue;
+    }
+    // Plain name. We don't know if it's a file or a dir, so add to both.
+    // The walker checks the Set that matches the entry's actual type.
+    const base = trimmed.replace(/[\\/]/g, '/').split('/').pop();
+    if (base) {
+      allIgnoredDirs.add(base);
+      allIgnoredFiles.add(base);
+    }
+  }
+
+  function matchesIgnoredPattern(name) {
+    for (const re of ignoredPatterns) {
+      if (re.test(name)) return true;
+    }
+    return false;
   }
 
   const gitignoreMatcher = await loadGitignoreMatcher(root);
@@ -104,6 +146,7 @@ export async function walkProject(root, options = {}) {
 
       if (entry.isDirectory()) {
         if (allIgnoredDirs.has(entry.name)) continue;
+        if (matchesIgnoredPattern(entry.name)) continue;
 
         const relDir = path
           .relative(root, path.join(dir, entry.name))
@@ -112,7 +155,8 @@ export async function walkProject(root, options = {}) {
 
         await walk(path.join(dir, entry.name), depth + 1);
       } else if (entry.isFile()) {
-        if (IGNORED_FILES.has(entry.name)) continue;
+        if (allIgnoredFiles.has(entry.name)) continue;
+        if (matchesIgnoredPattern(entry.name)) continue;
 
         const absPath = path.join(dir, entry.name);
         const relPath = path.relative(root, absPath).replace(/\\/g, '/');

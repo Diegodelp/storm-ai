@@ -19,7 +19,7 @@ async function tmpParent() {
 test('createProject: minimal input produces a valid scaffold', async () => {
   const { dir, cleanup } = await tmpParent();
   try {
-    const r = await createProject({ name: 'My App', parentDir: dir });
+    const r = await createProject({ name: 'My App', parentDir: dir, agent: 'claude-code' });
     assert.equal(r.safeName, 'my-app');
     assert.equal(r.projectRoot, path.join(dir, 'my-app'));
 
@@ -57,6 +57,7 @@ test('createProject: built-in skills are always merged', async () => {
       name: 'proj',
       parentDir: dir,
       skills: [{ name: 'ui-components', description: 'UI stuff' }],
+      agent: 'claude-code',
     });
     const config = JSON.parse(
       await readFile(path.join(r.projectRoot, 'project.config.json'), 'utf8'),
@@ -78,6 +79,7 @@ test('createProject: user skills with the same name as a built-in are deduped', 
       name: 'proj',
       parentDir: dir,
       skills: [{ name: 'compact-route', description: 'my override' }],
+      agent: 'claude-code',
     });
     const config = JSON.parse(
       await readFile(path.join(r.projectRoot, 'project.config.json'), 'utf8'),
@@ -101,6 +103,7 @@ test('createProject: branches produce .context-compact/<branch>.md files', async
         { path: 'src/auth', description: 'Auth' },
         { path: 'src/ui', description: 'UI' },
       ],
+      agent: 'claude-code',
     });
     const authMd = await readFile(
       path.join(r.projectRoot, '.context-compact', 'src-auth.md'),
@@ -121,7 +124,7 @@ test('createProject: branches produce .context-compact/<branch>.md files', async
 test('createProject: slash commands are written to .claude/commands/', async () => {
   const { dir, cleanup } = await tmpParent();
   try {
-    const r = await createProject({ name: 'proj', parentDir: dir });
+    const r = await createProject({ name: 'proj', parentDir: dir, agent: 'claude-code' });
     const taskAdd = await readFile(
       path.join(r.projectRoot, '.claude', 'commands', 'task-add.md'),
       'utf8',
@@ -164,6 +167,7 @@ test('createProject: writes agents when provided', async () => {
           tasks: ['Create components', 'Style pages'],
         },
       ],
+      agent: 'claude-code',
     });
     const agent = await readFile(
       path.join(r.projectRoot, '.claude', 'agents', 'frontend-dev.md'),
@@ -195,6 +199,7 @@ test('createProject: propagates model (provider + name) to config', async () => 
       name: 'proj',
       parentDir: dir,
       model: { provider: 'ollama-cloud', name: 'kimi-k2.6:cloud' },
+      agent: 'claude-code',
     });
     const config = JSON.parse(
       await readFile(path.join(r.projectRoot, 'project.config.json'), 'utf8'),
@@ -209,7 +214,7 @@ test('createProject: propagates model (provider + name) to config', async () => 
 test('createProject: default model when not provided', async () => {
   const { dir, cleanup } = await tmpParent();
   try {
-    const r = await createProject({ name: 'proj', parentDir: dir });
+    const r = await createProject({ name: 'proj', parentDir: dir, agent: 'claude-code' });
     const config = JSON.parse(
       await readFile(path.join(r.projectRoot, 'project.config.json'), 'utf8'),
     );

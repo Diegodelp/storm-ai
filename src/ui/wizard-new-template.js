@@ -27,6 +27,8 @@ import {
   pullOllamaModel,
   CLOUD_MODELS,
   LOCAL_RECOMMENDED,
+  PROVIDERS,
+  getProvider,
 } from '../core/providers.js';
 import { detectGit } from '../core/requirements.js';
 import * as ansi from './ansi.js';
@@ -141,11 +143,11 @@ export async function runNewFromTemplateWizard({ cwd }) {
     // Provider + modelo.
     const providerChoice = await clack.select({
       message: '¿Qué proveedor de IA?',
-      options: [
-        { value: 'ollama-cloud', label: 'Ollama (cloud)', hint: 'Gratis, calidad Claude.' },
-        { value: 'ollama-local', label: 'Ollama (local)', hint: 'Corre en tu máquina.' },
-        { value: 'claude',       label: 'Claude API',     hint: 'Requiere ANTHROPIC_API_KEY.' },
-      ],
+      options: PROVIDERS.map((p) => ({
+        value: p.id,
+        label: p.label,
+        hint: p.hint,
+      })),
       initialValue: 'ollama-cloud',
     });
     if (clack.isCancel(providerChoice)) return cancelled();
@@ -158,6 +160,7 @@ export async function runNewFromTemplateWizard({ cwd }) {
       model = await pickOllamaLocalModel();
       if (!model) return cancelled();
     }
+    // Otherwise: 'claude'/'via-claude-code'/'via-opencode' don't pick a model.
 
     // Confirmation.
     const summary = [
@@ -331,10 +334,7 @@ async function pickOllamaLocalModel() {
 }
 
 function providerLabel(p) {
-  if (p === 'ollama-cloud') return 'Ollama (cloud)';
-  if (p === 'ollama-local') return 'Ollama (local)';
-  if (p === 'claude') return 'Claude API';
-  return p;
+  return getProvider(p)?.label ?? p;
 }
 
 function cancelled() {

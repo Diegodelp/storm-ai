@@ -19,6 +19,64 @@ const CONFIG_FILE = 'project.config.json';
 const CURRENT_VERSION = 1;
 
 /**
+ * Default ignored paths for new projects.
+ *
+ * Two reasons something is in here:
+ *
+ *   1. Build artifacts and dependencies that bloat the index without
+ *      adding signal: .git, node_modules, dist, build, .next, .turbo,
+ *      coverage, etc. These would just slow down storm and clutter
+ *      the project map with noise the LLM doesn't need.
+ *
+ *   2. Sensitive files that MUST NEVER be indexed because the index
+ *      gets sent to the LLM. Anything matching a credential, token,
+ *      private key, or secret manifest goes here. We default-deny:
+ *      better to skip an innocent file the user can re-include than
+ *      to leak credentials in a prompt by accident.
+ *
+ * The user can override by editing `compact_context.ignored_paths` in
+ * project.config.json — but the defaults are shipped tight on purpose.
+ */
+export const DEFAULT_IGNORED_PATHS = Object.freeze([
+  // Build / deps
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  '.next',
+  '.turbo',
+  '.cache',
+  '.parcel-cache',
+  '.svelte-kit',
+  'out',
+  'coverage',
+  '.nyc_output',
+  // OS / editor noise
+  '.DS_Store',
+  '.idea',
+  '.vscode',
+  // Secrets / credentials — DO NOT REMOVE these without a really good reason.
+  '.env',
+  '.env.local',
+  '.env.development',
+  '.env.development.local',
+  '.env.production',
+  '.env.production.local',
+  '.env.test',
+  '.env.test.local',
+  '*.pem',
+  '*.key',
+  '*.cert',
+  '*.crt',
+  'credentials.json',
+  'service-account.json',
+  'secrets',
+  '.secrets',
+  '.aws',
+  '.ssh',
+]);
+
+/**
  * @typedef {Object} SkillConfig
  * @property {string} name
  * @property {boolean} [builtin]
@@ -145,7 +203,7 @@ export function createConfig(input) {
         comment:
           'v0.2 roadmap: proactive file watcher. When implemented, set to true to enable.',
       },
-      ignored_paths: ['.git', 'node_modules', 'dist', '.next', 'build'],
+      ignored_paths: [...DEFAULT_IGNORED_PATHS],
     },
   });
 }
@@ -291,7 +349,7 @@ function normalizeCompactContext(cc) {
   cc.map_files_per_branch ??= 10;
   cc.branches ??= [];
   cc.watcher ??= { enabled: false };
-  cc.ignored_paths ??= ['.git', 'node_modules', 'dist', '.next', 'build'];
+  cc.ignored_paths ??= [...DEFAULT_IGNORED_PATHS];
 
   if (typeof cc.auto_refresh_threshold !== 'number' || cc.auto_refresh_threshold < 1) {
     throw new ConfigError('compact_context.auto_refresh_threshold must be a positive integer.');

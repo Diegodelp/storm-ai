@@ -25,6 +25,7 @@ async function exists(p) {
   try { await stat(p); return true; } catch { return false; }
 }
 
+
 test('writeImport: scaffolds a fresh project', async () => {
   const { dir, cleanup } = await tmpProject(async (d) => {
     await writeFile(path.join(d, 'package.json'), '{"name":"foo"}');
@@ -46,6 +47,7 @@ test('writeImport: scaffolds a fresh project', async () => {
       agents: [
         { name: 'API Reviewer', slash: 'api-reviewer', description: 'reviews api code' },
       ],
+      agent: 'claude-code',
     });
 
     assert.ok(result.createdFiles.includes('project.config.json'));
@@ -83,6 +85,7 @@ test('writeImport: respects overwriteClaudeMd=false', async () => {
       skills: [],
       agents: [],
       overwriteClaudeMd: false,
+      agent: 'claude-code',
     });
 
     assert.ok(result.skippedFiles.includes('CLAUDE.md'));
@@ -108,6 +111,7 @@ test('writeImport: respects overwriteConfig=false', async () => {
       skills: [],
       agents: [],
       overwriteConfig: false,
+      agent: 'claude-code',
     });
     assert.ok(result.skippedFiles.includes('project.config.json'));
     const config = JSON.parse(await readFile(path.join(dir, 'project.config.json'), 'utf8'));
@@ -152,6 +156,7 @@ test('writeImport: does not overwrite existing skill files', async () => {
       branches: [],
       skills: [{ name: 'auth-reviewer', description: 'new desc' }],
       agents: [],
+      agent: 'claude-code',
     });
     assert.ok(result.skippedFiles.some((f) => f.includes('auth-reviewer')));
     const body = await readFile(path.join(dir, '.claude/skills/auth-reviewer.md'), 'utf8');
@@ -173,6 +178,7 @@ test('writeImport: built-in slash commands are written', async () => {
       branches: [],
       skills: [],
       agents: [],
+      agent: 'claude-code',
     });
     assert.ok(result.createdFiles.some((f) => f.includes('refresh-compact.md')));
     assert.ok(result.createdFiles.some((f) => f.includes('task-add.md')));
@@ -214,6 +220,7 @@ test('writeImport: first compact context uses declared branches (no _unassigned 
       ],
       skills: [],
       agents: [],
+      agent: 'claude-code',
     });
 
     // The project-map.md should now mention the declared branches.
@@ -243,6 +250,7 @@ test('writeImport: model shape is { provider, name }, not { provider, model }', 
       stackId: 'other',
       databaseId: 'none',
       model: { provider: 'ollama-cloud', name: 'kimi-k2.6:cloud' },
+      agent: 'claude-code',
       branches: [],
       skills: [],
       agents: [],
@@ -258,3 +266,62 @@ test('writeImport: model shape is { provider, name }, not { provider, model }', 
     await cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Agent-aware scaffolding (commit 4)
+// agent=claude-code  → CLAUDE.md at root, .claude/commands/ generated
+// agent=opencode     → .opencode/AGENTS.md, no .claude/commands/
+// ---------------------------------------------------------------------------
+
+test('writeImport with agent=claude-code: writes CLAUDE.md and .claude/commands/', async () => {
+  const { dir, cleanup } = await tmpProject();
+  try {
+    await writeImport({
+      projectRoot: dir,
+      name: 'foo',
+      description: '',
+      stackId: 'other',
+      databaseId: 'none',
+      model: { provider: 'claude', name: null },
+      agent: 'claude-code',
+      branches: [],
+      skills: [],
+      agents: [],
+    });
+    assert.ok(await exists(path.join(dir, 'CLAUDE.md')),
+      'CLAUDE.md should exist for claude-code');
+    assert.equal(await exists(path.join(dir, '.opencode/AGENTS.md')), false,
+      '.opencode/AGENTS.md should NOT exist for claude-code');
+    assert.ok(await exists(path.join(dir, '.claude/commands')),
+      '.claude/commands/ should exist for claude-code');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('writeImport with agent=opencode: writes .opencode/AGENTS.md, no .claude/commands/', async () => {
+  const { dir, cleanup } = await tmpProject();
+  try {
+    await writeImport({
+      projectRoot: dir,
+      name: 'foo',
+      description: '',
+      stackId: 'other',
+      databaseId: 'none',
+      model: { provider: 'claude', name: null },
+      agent: 'opencode',
+      branches: [],
+      skills: [],
+      agents: [],
+    });
+    assert.ok(await exists(path.join(dir, '.opencode/AGENTS.md')),
+      '.opencode/AGENTS.md should exist for opencode');
+    assert.equal(await exists(path.join(dir, 'CLAUDE.md')), false,
+      'CLAUDE.md should NOT exist for opencode');
+    assert.equal(await exists(path.join(dir, '.claude/commands')), false,
+      '.claude/commands/ should NOT exist for opencode');
+  } finally {
+    await cleanup();
+  }
+});
+
