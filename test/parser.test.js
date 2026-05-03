@@ -220,3 +220,91 @@ test('description capped at 140 chars', async () => {
     await cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// JSX in .js files
+//
+// Real Next.js Pages Router projects, Remix, Gatsby, Vite legacy templates
+// and many React codebases use plain `.js` for components with JSX. Babel's
+// plugin list is per-file, so `.js` must enable `jsx` to parse them.
+// ---------------------------------------------------------------------------
+
+test('JSX in .js: React component parses and exports are detected', async () => {
+  const { root, write, cleanup } = await setupTempProject();
+  try {
+    const file = await write('Navbar.js', `
+      import React from 'react';
+      export const Navbar = ({ user }) => (
+        <nav className="top">
+          <span>Hi {user.name}</span>
+        </nav>
+      );
+      export default Navbar;
+    `);
+    const r = await summarizeFile(file, root);
+    assert.equal(r.parseError, null,
+      `Expected no parseError, got: ${r.parseError}`);
+    assert.ok(r.exports.includes('Navbar'),
+      `Expected "Navbar" in exports, got: ${r.exports.join(', ')}`);
+    assert.ok(r.exports.includes('default'));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('JSX in .js: Next.js page (function component with hooks) parses', async () => {
+  const { root, write, cleanup } = await setupTempProject();
+  try {
+    const file = await write('index.js', `
+      import { useState } from 'react';
+      import Layout from '../components/Layout';
+
+      export default function Home() {
+        const [count, setCount] = useState(0);
+        return (
+          <Layout>
+            <h1>Welcome</h1>
+            <button onClick={() => setCount(count + 1)}>{count}</button>
+          </Layout>
+        );
+      }
+    `);
+    const r = await summarizeFile(file, root);
+    assert.equal(r.parseError, null);
+    assert.ok(r.exports.includes('default'));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('JSX in .js: fragment <>...</> parses', async () => {
+  const { root, write, cleanup } = await setupTempProject();
+  try {
+    const file = await write('frag.js', `
+      export const Wrap = ({ children }) => <>{children}</>;
+    `);
+    const r = await summarizeFile(file, root);
+    assert.equal(r.parseError, null);
+    assert.ok(r.exports.includes('Wrap'));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('JSX in .js: comparison operators still work (no JSX)', async () => {
+  // Sanity: enabling the jsx plugin must not break plain JS that uses
+  // < or > as comparison operators.
+  const { root, write, cleanup } = await setupTempProject();
+  try {
+    const file = await write('utils.js', `
+      export const isAdult = (age) => age >= 18;
+      export const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+      export const range = (n) => Array.from({ length: n }, (_, i) => i);
+    `);
+    const r = await summarizeFile(file, root);
+    assert.equal(r.parseError, null);
+    assert.equal(r.exports.length, 3);
+  } finally {
+    await cleanup();
+  }
+});

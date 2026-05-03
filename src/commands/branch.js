@@ -7,10 +7,12 @@
  * changing branches invalidates the existing .md files.
  */
 
-import { requireProjectRoot } from '../core/paths.js';
+import { requireProjectRoot, projectPaths } from '../core/paths.js';
 import { readConfig, writeConfig } from '../core/config.js';
 import { readState, writeState } from '../core/tasks.js';
 import { refreshCompactContext } from '../core/compact.js';
+import { rm } from 'node:fs/promises';
+import path from 'node:path';
 
 /**
  * @param {{cwd:string, path:string, description?:string}} input
@@ -65,6 +67,19 @@ export async function remove(input) {
     throw new Error(`Branch "${normalized}" not found.`);
   }
   await writeConfig(root, config);
+
+  // Delete the leftover .context-compact/<branch>.md so the LLM doesn't
+  // see stale documentation about a branch we just removed. Filename
+  // mirrors compact.js: slashes become dashes (e.g. `pages/api` → `pages-api.md`).
+  const compactFile = path.join(
+    projectPaths.compactDir(root),
+    normalized.replaceAll('/', '-') + '.md',
+  );
+  try {
+    await rm(compactFile, { force: true });
+  } catch {
+    // best-effort; the next refresh would handle it anyway.
+  }
 
   // Any tasks that referenced this branch now have a dangling reference;
   // we don't auto-rewrite them, but we warn.

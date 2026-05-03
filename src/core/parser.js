@@ -38,7 +38,15 @@ const traverse = _traverse.default ?? _traverse;
 
 const SUPPORTED_EXTS = new Set(['.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx']);
 const TS_EXTS = new Set(['.ts', '.tsx']);
-const JSX_EXTS = new Set(['.jsx', '.tsx']);
+// Habilitamos `jsx` para TODA extensión JS (no solo .jsx).
+// En la práctica, frameworks como Next.js (Pages Router), Remix,
+// Vite legacy, Gatsby y muchas codebases reales usan `.js` para
+// componentes con JSX. El plugin `jsx` de @babel/parser es retro-
+// compatible: si el archivo no tiene JSX, no afecta el parseo.
+// Para `.tsx`, además habilitamos `typescript` (TS_EXTS).
+// `.ts` puro NO recibe jsx — ahí sí choca con el operador `<` en
+// genéricos (e.g. `<T>(x: T) => x`).
+const JSX_EXTS = new Set(['.js', '.mjs', '.cjs', '.jsx', '.tsx']);
 
 /**
  * Public: summarize a single file.

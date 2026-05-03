@@ -30,6 +30,7 @@ import { refreshCompactContext } from '../core/compact.js';
 import { safeName, projectPaths, fileExists } from '../core/paths.js';
 import { writeState, regenerateTasksMd } from '../core/tasks.js';
 import { getStack } from '../core/stacks.js';
+import { getDefaultAgent } from '../core/global-config.js';
 
 /**
  * @typedef {Object} NewProjectInput
@@ -88,6 +89,10 @@ export async function createProject(input) {
   // Built-in skills are always included — they are the ones that power
   // the context-compact workflow.
   const skills = mergeBuiltinSkills(input.skills ?? []);
+
+  // Resolve agent: explicit input > global default > 'claude-code'.
+  const resolvedAgent = input.agent ?? (await getDefaultAgent());
+
   const config = createConfig({
     name: slug,
     description: input.description ?? '',
@@ -96,7 +101,7 @@ export async function createProject(input) {
     database: input.database ?? '',
     databaseId: input.databaseId ?? 'other',
     model: input.model,
-    agent: input.agent ?? 'claude-code',
+    agent: resolvedAgent,
     launch: input.launch ?? {},
     skills,
     agents: input.agents ?? [],

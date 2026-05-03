@@ -190,3 +190,111 @@ test('writeConfig outputs without BOM', async () => {
     await cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// model shape normalization
+//
+// Bug reproduced by OpenCode in real use: it built `{ provider, model }`
+// (legacy/alucinated shape) instead of `{ provider, name }`. Storm wrote
+// it without complaint, then `storm launch` failed because launcher reads
+// `model.name`. We normalize at write time to make this impossible.
+// ---------------------------------------------------------------------------
+
+test('model: { provider, model } legacy shape is migrated to { provider, name }', async () => {
+  const { root: dir, cleanup } = await tmpRoot();
+  try {
+    // Write a config with the legacy/alucinated shape directly.
+    const raw = {
+      version: 1,
+      name: 'foo',
+      model: { provider: 'ollama-cloud', model: 'gemma4:31b-cloud' },
+      skills: [],
+      agents: [],
+      compact_context: { branches: [] },
+    };
+    await writeFile(
+      path.join(dir, 'project.config.json'),
+      JSON.stringify(raw, null, 2),
+      'utf8',
+    );
+
+    const cfg = await readConfig(dir);
+    assert.equal(cfg.model.provider, 'ollama-cloud');
+    assert.equal(cfg.model.name, 'gemma4:31b-cloud');
+    // The wrong key was removed.
+    assert.equal(cfg.model.model, undefined);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('model: missing provider is rejected with a clear error', async () => {
+  const { root: dir, cleanup } = await tmpRoot();
+  try {
+    const raw = {
+      version: 1,
+      name: 'foo',
+      model: { name: 'something' },  // no provider!
+      skills: [],
+      agents: [],
+      compact_context: { branches: [] },
+    };
+    await writeFile(
+      path.join(dir, 'project.config.json'),
+      JSON.stringify(raw, null, 2),
+      'utf8',
+    );
+    await assert.rejects(
+      () => readConfig(dir),
+      /model\.provider/,
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('model: name must be string or null', async () => {
+  const { root: dir, cleanup } = await tmpRoot();
+  try {
+    const raw = {
+      version: 1,
+      name: 'foo',
+      model: { provider: 'claude', name: 42 },
+      skills: [],
+      agents: [],
+      compact_context: { branches: [] },
+    };
+    await writeFile(
+      path.join(dir, 'project.config.json'),
+      JSON.stringify(raw, null, 2),
+      'utf8',
+    );
+    await assert.rejects(() => readConfig(dir), /model\.name/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('model: { provider, name: null } is accepted (claude API does not need a model name)', async () => {
+  const { root: dir, cleanup } = await tmpRoot();
+  try {
+    const raw = {
+      version: 1,
+      name: 'foo',
+      model: { provider: 'claude', name: null },
+      skills: [],
+      agents: [],
+      compact_context: { branches: [] },
+    };
+    await writeFile(
+      path.join(dir, 'project.config.json'),
+      JSON.stringify(raw, null, 2),
+      'utf8',
+    );
+    const cfg = await readConfig(dir);
+    assert.equal(cfg.model.provider, 'claude');
+    assert.equal(cfg.model.name, null);
+  } finally {
+    await cleanup();
+  }
+});

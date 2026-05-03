@@ -14,6 +14,7 @@
 
 import { Command } from 'commander';
 import process from 'node:process';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import * as taskCmd from './commands/task.js';
@@ -32,6 +33,14 @@ import { runSkillAddWizard } from './ui/wizard-skill.js';
 import { runImportWizard } from './ui/wizard-import.js';
 import * as ansi from './ui/ansi.js';
 import { getVersion } from './core/version.js';
+
+/**
+ * Commander option callback: appends each --flag value to an array.
+ * Use as `.option('--branch <path>', '...', collect, [])`.
+ */
+function collect(value, previous) {
+  return [...(previous ?? []), value];
+}
 
 export async function runCli(argv) {
   // No args → interactive menu. This is the entry point for most users.
@@ -276,8 +285,9 @@ export async function runCli(argv) {
   // -------------------------------------------------------------------------
   program
     .command('open [target]')
-    .description('Open an existing project. Without target, list projects.')
-    .action(async (target) => {
+    .description('Abre un proyecto: sin <target> lista los disponibles, con <target> lanza el agent.')
+    .option('--print', 'Solo imprimir la ruta, no lanzar el agent.')
+    .action(async (target, opts) => {
       if (!target) {
         const found = await discoverProjects({});
         if (found.length === 0) {
@@ -288,13 +298,32 @@ export async function runCli(argv) {
           console.log(`  ${ansi.cyan(p.name)}  ${ansi.dim(p.root)}`);
         }
         console.log(
-          '\n' + ansi.dim('Usage: storm open <name>  (launches Claude Code in that project)'),
+          '\n' + ansi.dim('Usage:  storm open <name>           launches the configured agent'),
+        );
+        console.log(
+          ansi.dim('        storm open <name> --print   only prints the path'),
         );
         return;
       }
       const root = await resolveTarget({ cwd: process.cwd(), target });
-      console.log(ansi.green('✓') + ` ${ansi.cyan(root)}`);
-      console.log(ansi.dim('  Run `claude` in that directory to start a session.'));
+
+      if (opts.print) {
+        // Just print the path — useful for shell snippets like
+        //   cd "$(storm open my-app --print)"
+        console.log(root);
+        return;
+      }
+
+      // Default: actually launch the configured agent in that project.
+      console.log(ansi.green('✓') + ` Opening ${ansi.cyan(root)}`);
+      try {
+        const { launchForProject } = await import('./commands/launch.js');
+        await launchForProject({ projectRoot: root });
+      } catch (err) {
+        console.error(ansi.red('error: ') + (err.message ?? String(err)));
+        console.error(ansi.dim('To get just the path, use:  storm open ' + target + ' --print'));
+        process.exitCode = 1;
+      }
     });
 
   // -------------------------------------------------------------------------
@@ -405,11 +434,75 @@ export async function runCli(argv) {
 
   // -------------------------------------------------------------------------
   // storm import [path]
+  //
+  // Two modes:
+  //   - Interactive (default): wizard with prompts. Requires a TTY.
+  //   - Non-interactive: triggered by passing flags or running in a non-TTY
+  //     environment (CI, agent subprocess). Driven entirely by flags.
   // -------------------------------------------------------------------------
   program
     .command('import [path]')
     .description('Importa un proyecto existente: analiza con LLM y agrega scaffolding storm.')
-    .action(async (importPath) => {
+    .option('-y, --yes', 'Pisar archivos existentes sin preguntar (no interactivo).')
+    .option('--mode <mode>', 'Profundidad del análisis: shallow | deep.')
+    .option('--provider <id>', 'Provider del LLM: ollama-cloud | ollama-local | claude.')
+    .option('--model <name>', 'Nombre del modelo (e.g. kimi-k2.6:cloud).')
+    .option('--agent <id>', 'Agent (CLI): claude-code | opencode | <custom>.')
+    .option('--name <name>', 'Nombre del proyecto.')
+    .option('--description <text>', 'Descripción corta.')
+    .option('--stack <id>', 'Override del stack detectado por el LLM.')
+    .option('--db <id>', 'Override de la base de datos.')
+    .option('--branch <path>', 'Sumar branch (repetible).', collect, [])
+    .option('--skill <name>', 'Sumar skill custom (repetible).', collect, [])
+    .option('--agent-name <name>', 'Sumar agent file custom (repetible).', collect, [])
+    .option('--skip-llm', 'No llamar al LLM, usar solo defaults + flags.')
+    .action(async (importPath, opts) => {
+      // Flags-driven invocation forces non-interactive mode.
+      const flagsPresent = opts.yes || opts.mode || opts.provider || opts.model ||
+        opts.skipLlm || opts.name || opts.stack || opts.db ||
+        (opts.branch && opts.branch.length) ||
+        (opts.skill && opts.skill.length);
+
+      // No TTY → can't run the wizard regardless of flags.
+      const noTty = !process.stdin.isTTY || !process.stdout.isTTY;
+
+      if (flagsPresent || noTty) {
+        if (noTty && !opts.yes) {
+          console.error(
+            ansi.red('error:') +
+            ' storm import necesita --yes en entornos no interactivos para confirmar overrides.\n' +
+            'Sumá --yes y los flags que necesites (--provider, --mode, etc).',
+          );
+          process.exitCode = 1;
+          return;
+        }
+        try {
+          const { runImportNonInteractive } = await import('./commands/import.js');
+          await runImportNonInteractive({
+            cwd: importPath ? path.resolve(process.cwd(), importPath) : process.cwd(),
+            mode: opts.mode,
+            provider: opts.provider,
+            model: opts.model ?? null,
+            agent: opts.agent,
+            name: opts.name,
+            description: opts.description,
+            stack: opts.stack,
+            db: opts.db,
+            extraBranches: opts.branch,
+            skills: opts.skill,
+            agentNames: opts.agentName,
+            yes: !!opts.yes,
+            skipLLM: !!opts.skipLlm,
+            log: (msg) => console.log(msg),
+          });
+        } catch (err) {
+          console.error(ansi.red('error:') + ' ' + (err.message ?? String(err)));
+          process.exitCode = 1;
+        }
+        return;
+      }
+
+      // Default: interactive wizard.
       await runImportWizard({
         cwd: process.cwd(),
         providedPath: importPath,

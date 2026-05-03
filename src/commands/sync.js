@@ -29,13 +29,32 @@ import {
 } from '../core/stacks.js';
 import { refreshCompactContext } from '../core/compact.js';
 
-const CODE_EXTS = new Set([
+// Extensions that count as "real content" for staleness detection.
+// A branch is marked stale only if it has 0 files of any of these
+// types anywhere underneath. This must be inclusive enough that branches
+// like `styles/` (CSS only), `prisma/` (.prisma only), `content/` (.md/.mdx
+// only), `data/` (JSON-only), or `public/` (static assets) are NOT marked
+// stale just because they don't contain JS/TS code.
+//
+// We DO require something — a fully empty directory is correctly stale.
+const TRACKED_EXTS = new Set([
+  // Source code
   '.js', '.mjs', '.cjs', '.jsx',
   '.ts', '.tsx',
   '.svelte', '.astro', '.vue',
   '.py', '.rb', '.go', '.rs',
-  '.json',
+  // Styling
+  '.css', '.scss', '.sass', '.less', '.styl',
+  // Schema / data
+  '.json', '.jsonc',
+  '.prisma', '.graphql', '.gql',
+  '.yaml', '.yml', '.toml',
+  '.sql',
+  // Markup / docs (when used as content branches)
+  '.md', '.mdx', '.html', '.htm',
 ]);
+// Backward-compat alias for any callers.
+const CODE_EXTS = TRACKED_EXTS;
 
 const MIN_FILES_FOR_BRANCH = 1; // ≥1 code file in the dir to count
 const MAX_SCAN_DEPTH = 6;
