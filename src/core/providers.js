@@ -22,6 +22,68 @@ const execAsync = promisify(exec);
 const OLLAMA_LIST_TIMEOUT_MS = 5000;
 
 /**
+ * Canonical list of LLM providers storm can use to analyze projects
+ * during `storm import`. This is the single source of truth — wizards,
+ * `storm config`, and the CLI all import this.
+ *
+ * Each provider has:
+ *   - id:       internal id used in project.config.json and global config
+ *   - label:    short human-readable name shown in pickers
+ *   - hint:     one-line description shown next to the label
+ *   - hasModelPicker: true → after picking the provider, show a model
+ *                    picker (Ollama models, etc.). false → the provider
+ *                    decides the model itself (claude API uses the env
+ *                    default, via-* delegate to the configured CLI).
+ *   - requiresCli: optional. If set, storm verifies this binary is in
+ *                  PATH before calling. Used by the via-* providers.
+ */
+export const PROVIDERS = Object.freeze([
+  {
+    id: 'ollama-cloud',
+    label: 'Ollama (cloud)',
+    hint: 'Modelos hosteados gratis con login de Ollama. Recomendado.',
+    hasModelPicker: true,
+    requiresCli: null,
+  },
+  {
+    id: 'ollama-local',
+    label: 'Ollama (local)',
+    hint: 'Modelos descargados en tu máquina. Privado, sin internet.',
+    hasModelPicker: true,
+    requiresCli: null,
+  },
+  {
+    id: 'claude',
+    label: 'Claude API',
+    hint: 'Anthropic API directa. Requiere ANTHROPIC_API_KEY.',
+    hasModelPicker: false,
+    requiresCli: null,
+  },
+  {
+    id: 'via-claude-code',
+    label: 'Via Claude Code CLI',
+    hint: 'Delega al CLI `claude`. Usa el modelo configurado en Claude Code.',
+    hasModelPicker: false,
+    requiresCli: 'claude',
+  },
+  {
+    id: 'via-opencode',
+    label: 'Via OpenCode CLI',
+    hint: 'Delega al CLI `opencode`. Útil si tu sub de ChatGPT está ahí.',
+    hasModelPicker: false,
+    requiresCli: 'opencode',
+  },
+]);
+
+/**
+ * @param {string} id
+ * @returns {(typeof PROVIDERS)[number] | null}
+ */
+export function getProvider(id) {
+  return PROVIDERS.find((p) => p.id === id) ?? null;
+}
+
+/**
  * Curated list of recommended cloud models. These run on Ollama's hosted
  * infrastructure (https://ollama.com) and don't require a local download.
  * Source: Ollama's Claude Code integration doc + ollama.com/search?c=cloud.

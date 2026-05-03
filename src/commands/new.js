@@ -79,11 +79,11 @@ export async function createProject(input) {
   const createdFiles = [];
 
   // 2. Create directory skeleton.
+  // .context-compact/ is always created (storm's universal output).
+  // .claude/* dirs are only created when the user picks claude-code, so
+  // an opencode project doesn't get empty .claude/ subtrees lying around.
   await mkdir(projectRoot, { recursive: true });
   await mkdir(projectPaths.compactDir(projectRoot), { recursive: true });
-  await mkdir(projectPaths.claudeCommands(projectRoot), { recursive: true });
-  await mkdir(projectPaths.claudeSkills(projectRoot), { recursive: true });
-  await mkdir(projectPaths.claudeAgents(projectRoot), { recursive: true });
 
   // 3. Build and write project.config.json.
   // Built-in skills are always included — they are the ones that power
@@ -92,6 +92,12 @@ export async function createProject(input) {
 
   // Resolve agent: explicit input > global default > 'claude-code'.
   const resolvedAgent = input.agent ?? (await getDefaultAgent());
+
+  if (resolvedAgent === 'claude-code') {
+    await mkdir(projectPaths.claudeCommands(projectRoot), { recursive: true });
+    await mkdir(projectPaths.claudeSkills(projectRoot), { recursive: true });
+    await mkdir(projectPaths.claudeAgents(projectRoot), { recursive: true });
+  }
 
   const config = createConfig({
     name: slug,
@@ -128,33 +134,45 @@ export async function createProject(input) {
   await regenerateTasksMd(projectRoot, state);
   createdFiles.push('.context-compact/task-state.json', 'TASKS.md');
 
-  // 5. Write CLAUDE.md.
-  const claudeMd = renderClaudeMd({ config, slug });
-  await writeFile(projectPaths.claudeMd(projectRoot), claudeMd, 'utf8');
-  createdFiles.push('CLAUDE.md');
+  // 5. Write agent instructions file (CLAUDE.md or .opencode/AGENTS.md
+  // depending on the agent the user picked).
+  const agentMd = renderAgentMd({ config, slug });
+  const agentMdPath = path.join(projectRoot, agentMd.filename);
+  await mkdir(path.dirname(agentMdPath), { recursive: true });
+  await writeFile(agentMdPath, agentMd.content, 'utf8');
+  createdFiles.push(agentMd.filename);
 
   // 6. Write built-in slash commands.
-  const commandFiles = renderBuiltinCommands();
-  for (const { filename, content } of commandFiles) {
-    const dest = path.join(projectPaths.claudeCommands(projectRoot), filename);
-    await writeFile(dest, content, 'utf8');
-    createdFiles.push(path.join('.claude', 'commands', filename));
-  }
+  // These use Claude Code's specific markdown format (`.claude/commands/<name>.md`
+  // with a frontmatter description). OpenCode and other agents have their
+  // own command/prompt systems, so we only emit these when the user picked
+  // claude-code. Other agents can read the workflow from AGENTS.md.
+  if (resolvedAgent === 'claude-code') {
+    const commandFiles = renderBuiltinCommands();
+    for (const { filename, content } of commandFiles) {
+      const dest = path.join(projectPaths.claudeCommands(projectRoot), filename);
+      await writeFile(dest, content, 'utf8');
+      createdFiles.push(path.join('.claude', 'commands', filename));
+    }
 
-  // 7. Write user skills (if any) as placeholder .md files.
-  for (const skill of skills.filter((s) => !s.builtin)) {
-    const filename = `${safeName(skill.name)}.md`;
-    const dest = path.join(projectPaths.claudeSkills(projectRoot), filename);
-    await writeFile(dest, renderSkillSkeleton(skill), 'utf8');
-    createdFiles.push(path.join('.claude', 'skills', filename));
-  }
+    // 7. Write user skills (if any) as placeholder .md files.
+    // These live under .claude/skills/ which is Claude Code's convention.
+    // For opencode users, the skills are still tracked in project.config.json
+    // (which OpenCode reads) — they just don't get individual .md scaffolds.
+    for (const skill of skills.filter((s) => !s.builtin)) {
+      const filename = `${safeName(skill.name)}.md`;
+      const dest = path.join(projectPaths.claudeSkills(projectRoot), filename);
+      await writeFile(dest, renderSkillSkeleton(skill), 'utf8');
+      createdFiles.push(path.join('.claude', 'skills', filename));
+    }
 
-  // 8. Write agents (if any).
-  for (const agent of input.agents ?? []) {
-    const filename = `${safeName(agent.slash || agent.name)}.md`;
-    const dest = path.join(projectPaths.claudeAgents(projectRoot), filename);
-    await writeFile(dest, renderAgentSkeleton(agent), 'utf8');
-    createdFiles.push(path.join('.claude', 'agents', filename));
+    // 8. Write agents (if any).
+    for (const agent of input.agents ?? []) {
+      const filename = `${safeName(agent.slash || agent.name)}.md`;
+      const dest = path.join(projectPaths.claudeAgents(projectRoot), filename);
+      await writeFile(dest, renderAgentSkeleton(agent), 'utf8');
+      createdFiles.push(path.join('.claude', 'agents', filename));
+    }
   }
 
   // 9. Run the first compact-context refresh. At this point most projects
@@ -221,7 +239,22 @@ function mergeBuiltinSkills(userSkills) {
 /**
  * @param {{config: import('../core/config.js').ProjectConfig, slug: string}} args
  */
-function renderClaudeMd({ config, slug }) {
+/**
+ * Render the project's "agent instructions" markdown file.
+ *
+ * @param {Object} args
+ * @param {import('../core/config.js').ProjectConfig} args.config
+ * @param {string} args.slug
+ * @param {string} [args.agentId]   'claude-code' | 'opencode' | other.
+ *                                  Defaults to config.agent.
+ * @returns {{ filename: string, content: string }}
+ *   filename relative to projectRoot:
+ *     'CLAUDE.md'              (claude-code)
+ *     '.opencode/AGENTS.md'    (opencode)
+ *     'AGENTS.md'              (other)
+ */
+function renderAgentMd({ config, slug, agentId }) {
+  const agent = agentId ?? config.agent ?? 'claude-code';
   const branches = config.compact_context.branches;
   const skills = config.skills;
   const agents = config.agents;
@@ -262,7 +295,22 @@ function renderClaudeMd({ config, slug }) {
       'con `storm branch add <path> "descripción"` antes de crear archivos adentro.\n';
   }
 
-  return `# ${slug}
+  // Adapt the "where skills live" hint to the agent. Both agents read
+  // skills from .claude/skills/ today (storm writes them there), so the
+  // copy is the same — but we keep this branchable in case OpenCode ever
+  // wants its own skill layout.
+  const skillsLocationHint =
+    agent === 'opencode'
+      ? 'This creates `.claude/skills/<slug>.md` (storm writes skill files there) and tracks it in `project.config.json`. OpenCode currently reads skill metadata from `project.config.json`.'
+      : 'This creates `.claude/skills/<slug>.md` (where Claude Code looks for them) and tracks it in `project.config.json`.';
+
+  // Filename / location depends on the agent.
+  const filename =
+    agent === 'opencode'    ? '.opencode/AGENTS.md' :
+    agent === 'claude-code' ? 'CLAUDE.md' :
+    'AGENTS.md';
+
+  const content = `# ${slug}
 
 ${config.description || '_No project description yet._'}
 
@@ -323,8 +371,7 @@ You can add a per-project skill at any time:
 storm skill add <n>
 \`\`\`
 
-This creates \`.claude/skills/<slug>.md\` (where Claude Code looks for them)
-and tracks it in \`project.config.json\`.
+${skillsLocationHint}
 
 ### Available agents
 
@@ -336,6 +383,8 @@ ${agentLines}
 - **Never overwrite the "## Notes" section of a \`.context-compact/<branch>.md\` file.** Append only.
 - When you create new directories, prefer paths that match the stack's branch patterns above. If a different layout is genuinely better, register the branch with \`storm branch add\` and explain why in its description.
 `;
+
+  return { filename, content };
 }
 
 function renderSkillSkeleton(skill) {

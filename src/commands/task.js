@@ -72,9 +72,16 @@ export async function done(input) {
   const res = await transition(input, 'done');
 
   // Auto-sync after marking done: pick up any new directories the AI
-  // (or the user) created while working on this task. Best-effort —
-  // failures are surfaced as a warning but don't fail the task transition.
-  // Disabled by setting compact_context.auto_sync = false in the config.
+  // (or the user) created while working on this task, AND regenerate the
+  // compact context immediately so the next prompt sees the new branches.
+  //
+  // Trade-off: this scans the whole project on every `task done`. On large
+  // projects this can cost a few seconds. Users who'd rather control when
+  // sync runs can opt out with `compact_context.auto_sync = false` and
+  // call `storm sync` manually.
+  //
+  // Best-effort — failures are surfaced as a warning but don't fail the
+  // task transition.
   try {
     const { readConfig } = await import('../core/config.js');
     const config = await readConfig(res.projectRoot);
@@ -82,13 +89,10 @@ export async function done(input) {
 
     if (autoSync) {
       const { sync } = await import('./sync.js');
-      // Skip the .context-compact regeneration — `storm refresh` will
-      // do that when the user explicitly asks (or when shouldRefresh
-      // triggers below).
       const report = await sync({
         cwd: res.projectRoot,
         projectRoot: res.projectRoot,
-        regenerate: false,
+        regenerate: true,
       });
       res.sync = report;
     }
