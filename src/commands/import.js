@@ -19,13 +19,20 @@ import path from 'node:path';
 import { scanProject, buildAnalysisPrompt } from '../core/analyze.js';
 import { complete } from '../core/llm-client.js';
 import { parseAnalysis } from '../core/parse-analysis.js';
-import { createConfig, writeConfig } from '../core/config.js';
+import { createConfig, writeConfig, readConfig } from '../core/config.js';
 import { refreshCompactContext } from '../core/compact.js';
 import { writeState, regenerateTasksMd } from '../core/tasks.js';
 import { projectPaths } from '../core/paths.js';
 import { getStack, getDatabase } from '../core/stacks.js';
 import { getDefaultProvider, getDefaultAgent } from '../core/global-config.js';
 import { sync } from './sync.js';
+import {
+  BUILTIN_OPENCODE_COMMANDS,
+  BUILTIN_OPENCODE_AGENTS,
+  renderOpencodeCommand,
+  renderOpencodeAgent,
+  renderOpencodeIndex,
+} from '../core/opencode-scaffold.js';
 
 /**
  * @typedef {Object} AnalyzeArgs
@@ -91,19 +98,22 @@ export async function analyzeForImport(args) {
  * showing confirm prompts, so it can ask the user per-file.
  *
  * @param {string} projectRoot
- * @returns {Promise<{claudeMd: boolean, config: boolean, tasks: boolean, contextDir: boolean, claudeDir: boolean, opencodeDir: boolean, agentsMd: boolean}>}
+ * @returns {Promise<{claudeMd: boolean, config: boolean, tasks: boolean, contextDir: boolean, claudeDir: boolean, opencodeDir: boolean, agentsMd: boolean, opencodeCommands: boolean, opencodeAgents: boolean}>}
  */
 export async function detectConflicts(projectRoot) {
   return {
-    claudeMd:    await pathExists(path.join(projectRoot, 'CLAUDE.md')),
-    config:      await pathExists(path.join(projectRoot, 'project.config.json')),
-    tasks:       await pathExists(path.join(projectRoot, 'TASKS.md')),
-    contextDir:  await pathExists(projectPaths.compactDir(projectRoot)),
-    claudeDir:   await pathExists(path.join(projectRoot, '.claude')),
-    opencodeDir: await pathExists(path.join(projectRoot, '.opencode')),
-    // .opencode/AGENTS.md is the equivalent of CLAUDE.md for OpenCode users.
-    agentsMd:    await pathExists(path.join(projectRoot, '.opencode/AGENTS.md')) ||
-                 await pathExists(path.join(projectRoot, 'AGENTS.md')),
+    claudeMd:         await pathExists(path.join(projectRoot, 'CLAUDE.md')),
+    config:           await pathExists(path.join(projectRoot, 'project.config.json')),
+    tasks:            await pathExists(path.join(projectRoot, 'TASKS.md')),
+    contextDir:       await pathExists(projectPaths.compactDir(projectRoot)),
+    claudeDir:        await pathExists(path.join(projectRoot, '.claude')),
+    opencodeDir:      await pathExists(path.join(projectRoot, '.opencode')),
+    opencodeCommands: await pathExists(path.join(projectRoot, '.opencode/commands')),
+    opencodeAgents:   await pathExists(path.join(projectRoot, '.opencode/agents')),
+    // AGENTS.md is the equivalent of CLAUDE.md for OpenCode users —
+    // either at .opencode/AGENTS.md or at the project root.
+    agentsMd:         await pathExists(path.join(projectRoot, '.opencode/AGENTS.md')) ||
+                      await pathExists(path.join(projectRoot, 'AGENTS.md')),
   };
 }
 
@@ -161,11 +171,13 @@ export async function writeImport(plan) {
   // Resolve which agent to use: explicit plan.agent > global default > 'claude-code'.
   const resolvedAgent = plan.agent ?? (await getDefaultAgent());
 
-  // Create .claude/ subdirs only when the user actually uses claude-code.
+  // Create scaffold subdirs only for the agent the user actually uses.
   if (resolvedAgent === 'claude-code') {
     await mkdir(projectPaths.claudeCommands(plan.projectRoot), { recursive: true });
     await mkdir(projectPaths.claudeSkills(plan.projectRoot), { recursive: true });
     await mkdir(projectPaths.claudeAgents(plan.projectRoot), { recursive: true });
+  } else if (resolvedAgent === 'opencode') {
+    await mkdir(projectPaths.opencodeDir(plan.projectRoot), { recursive: true });
   }
 
   const config = createConfig({
@@ -263,6 +275,40 @@ export async function writeImport(plan) {
     // Built-in slash commands (always written for claude-code; they're
     // storm's own commands and the user shouldn't have hand-edited them).
     await writeBuiltinCommands(plan.projectRoot, result);
+  } else if (resolvedAgent === 'opencode') {
+    // OpenCode-specific scaffolding: knowledge-base files under
+    // .opencode/commands/ and .opencode/agents/ that AGENTS.md indexes.
+    // OpenCode auto-loads AGENTS.md but does NOT execute the per-command
+    // files as slash commands — they're documentation the LLM reads when
+    // the user asks for a specific operation.
+    await mkdir(projectPaths.opencodeCommands(plan.projectRoot), { recursive: true });
+    await mkdir(projectPaths.opencodeAgents(plan.projectRoot), { recursive: true });
+
+    for (const cmd of BUILTIN_OPENCODE_COMMANDS) {
+      const file = path.join(projectPaths.opencodeCommands(plan.projectRoot), `${cmd.id}.md`);
+      // Storm's commands docs are always-fresh — overwrite without asking.
+      // (User-authored project notes don't live here.)
+      await writeFile(file, renderOpencodeCommand(cmd), 'utf8');
+      result.createdFiles.push(`.opencode/commands/${cmd.id}.md`);
+    }
+    for (const ag of BUILTIN_OPENCODE_AGENTS) {
+      const file = path.join(projectPaths.opencodeAgents(plan.projectRoot), `${ag.id}.md`);
+      await writeFile(file, renderOpencodeAgent(ag), 'utf8');
+      result.createdFiles.push(`.opencode/agents/${ag.id}.md`);
+    }
+
+    // Per-project user agents (from config.agents) also get a knowledge-base
+    // file under .opencode/agents/. These are the user's custom roles, not
+    // the builtins.
+    for (const agent of config.agents) {
+      const file = path.join(projectPaths.opencodeAgents(plan.projectRoot), `${agent.slash}.md`);
+      if (await pathExists(file)) {
+        result.skippedFiles.push(`.opencode/agents/${agent.slash}.md`);
+        continue;
+      }
+      await writeFile(file, renderAgentTemplate(agent), 'utf8');
+      result.createdFiles.push(`.opencode/agents/${agent.slash}.md`);
+    }
   }
 
   // Generate compact context for the project.
@@ -296,6 +342,22 @@ export async function writeImport(plan) {
       result.warnings.push(
         `Sync agregó ${syncReport.added.length} branch(es) detectada(s) en el filesystem: ${names}`,
       );
+
+      // The agent instructions file (CLAUDE.md / .opencode/AGENTS.md) was
+      // generated BEFORE sync ran, so its "Branches" section is now stale.
+      // Re-render it with the post-sync config so the LLM sees the
+      // complete picture.
+      try {
+        const updatedConfig = await readConfig(plan.projectRoot);
+        const updatedAgentMd = renderAgentMd({ config: updatedConfig });
+        const updatedAgentMdPath = path.join(plan.projectRoot, updatedAgentMd.filename);
+        await mkdir(path.dirname(updatedAgentMdPath), { recursive: true });
+        await writeFile(updatedAgentMdPath, updatedAgentMd.content, 'utf8');
+      } catch (err) {
+        result.warnings.push(
+          `No pude regenerar ${agentMd.filename} después del sync: ${err.message}`,
+        );
+      }
     }
   } catch (err) {
     result.warnings.push(`Sync post-import falló: ${err.message}`);
@@ -395,6 +457,35 @@ function renderAgentMd({ config, agentId }) {
     agent === 'claude-code' ? 'CLAUDE.md' :
     'AGENTS.md';
 
+  // For OpenCode: append a section listing the per-command and per-agent
+  // knowledge-base files we wrote under .opencode/commands/ and
+  // .opencode/agents/. OpenCode doesn't auto-load those — but it does
+  // auto-load AGENTS.md, so this is how we make them discoverable.
+  let opencodeIndexBlock = '';
+  if (agent === 'opencode') {
+    const idx = renderOpencodeIndex();
+    opencodeIndexBlock = `
+
+## Storm CLI commands (referencia)
+
+The following knowledge-base files describe the storm CLI commands you
+should use to manage tasks, branches, skills, and the compact-context.
+Read the relevant file before invoking the underlying command.
+
+${idx.commands}
+
+## Storm roles (referencia)
+
+The following files describe roles you can adopt when the user asks
+for a specific kind of work:
+
+${idx.agents}
+
+When the user describes a task that fits one of these roles, read the
+corresponding file first to understand the expected workflow.
+`;
+  }
+
   const content = `# ${config.name}
 
 ${config.description || '_No project description yet._'}
@@ -434,7 +525,7 @@ ${skillLines}
 ### Available agents
 
 ${agentLines}
-
+${opencodeIndexBlock}
 ## Guardrails
 
 - **Never edit \`TASKS.md\` directly.** It is generated from \`.context-compact/task-state.json\`.

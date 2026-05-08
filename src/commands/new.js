@@ -31,6 +31,12 @@ import { safeName, projectPaths, fileExists } from '../core/paths.js';
 import { writeState, regenerateTasksMd } from '../core/tasks.js';
 import { getStack } from '../core/stacks.js';
 import { getDefaultAgent } from '../core/global-config.js';
+import {
+  BUILTIN_OPENCODE_COMMANDS,
+  BUILTIN_OPENCODE_AGENTS,
+  renderOpencodeCommand,
+  renderOpencodeAgent,
+} from '../core/opencode-scaffold.js';
 
 /**
  * @typedef {Object} NewProjectInput
@@ -97,6 +103,8 @@ export async function createProject(input) {
     await mkdir(projectPaths.claudeCommands(projectRoot), { recursive: true });
     await mkdir(projectPaths.claudeSkills(projectRoot), { recursive: true });
     await mkdir(projectPaths.claudeAgents(projectRoot), { recursive: true });
+  } else if (resolvedAgent === 'opencode') {
+    await mkdir(projectPaths.opencodeDir(projectRoot), { recursive: true });
   }
 
   const config = createConfig({
@@ -172,6 +180,30 @@ export async function createProject(input) {
       const dest = path.join(projectPaths.claudeAgents(projectRoot), filename);
       await writeFile(dest, renderAgentSkeleton(agent), 'utf8');
       createdFiles.push(path.join('.claude', 'agents', filename));
+    }
+  } else if (resolvedAgent === 'opencode') {
+    // OpenCode-specific scaffolding: knowledge-base under .opencode/.
+    // AGENTS.md is auto-loaded by OpenCode and indexes everything below.
+    await mkdir(projectPaths.opencodeCommands(projectRoot), { recursive: true });
+    await mkdir(projectPaths.opencodeAgents(projectRoot), { recursive: true });
+
+    for (const cmd of BUILTIN_OPENCODE_COMMANDS) {
+      const dest = path.join(projectPaths.opencodeCommands(projectRoot), `${cmd.id}.md`);
+      await writeFile(dest, renderOpencodeCommand(cmd), 'utf8');
+      createdFiles.push(path.join('.opencode', 'commands', `${cmd.id}.md`));
+    }
+    for (const ag of BUILTIN_OPENCODE_AGENTS) {
+      const dest = path.join(projectPaths.opencodeAgents(projectRoot), `${ag.id}.md`);
+      await writeFile(dest, renderOpencodeAgent(ag), 'utf8');
+      createdFiles.push(path.join('.opencode', 'agents', `${ag.id}.md`));
+    }
+
+    // User-defined agents from input become per-project role docs.
+    for (const agent of input.agents ?? []) {
+      const filename = `${safeName(agent.slash || agent.name)}.md`;
+      const dest = path.join(projectPaths.opencodeAgents(projectRoot), filename);
+      await writeFile(dest, renderAgentSkeleton(agent), 'utf8');
+      createdFiles.push(path.join('.opencode', 'agents', filename));
     }
   }
 

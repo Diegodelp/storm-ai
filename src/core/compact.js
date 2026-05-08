@@ -149,10 +149,55 @@ export async function refreshCompactContext(projectRoot, options) {
       remaining: Math.max(0, ranked.length - mapFilesPerBranch),
       tasks: [],
     });
-    warnings.push(
-      `Found ${unassigned.length} file(s) outside declared branches. ` +
-        `See ${path.join(COMPACT_DIR, UNASSIGNED_BRANCH + '.md')}.`,
-    );
+
+    // Classify _unassigned files: root-level config files (package.json,
+    // next.config.js, tsconfig.json, etc.) are EXPECTED to be there —
+    // they don't belong to any branch by design. We say so explicitly so
+    // the user / LLM doesn't think it's a bug. Other unassigned files
+    // are genuinely unclassified and might want a new branch.
+    const rootConfigFiles = new Set([
+      'package.json', 'tsconfig.json', 'jsconfig.json',
+      'next.config.js', 'next.config.mjs', 'next.config.ts',
+      'vite.config.js', 'vite.config.ts', 'vite.config.mjs',
+      'astro.config.mjs', 'astro.config.ts',
+      'svelte.config.js', 'remix.config.js',
+      'tailwind.config.js', 'tailwind.config.ts',
+      'postcss.config.js', 'postcss.config.mjs',
+      'babel.config.js', '.babelrc', '.babelrc.json',
+      'eslint.config.js', '.eslintrc', '.eslintrc.json',
+      'prettier.config.js', '.prettierrc',
+      'jest.config.js', 'vitest.config.js', 'vitest.config.ts',
+      'turbo.json', 'nx.json', 'rush.json',
+      'pnpm-workspace.yaml',
+      'Dockerfile', 'docker-compose.yml', 'docker-compose.yaml',
+      'Makefile', 'README.md', 'LICENSE', 'CHANGELOG.md',
+      '.nvmrc', '.node-version', '.gitignore',
+    ]);
+    const isRootConfig = (s) => {
+      const base = path.basename(s.relativePath);
+      const dir = path.dirname(s.relativePath);
+      return (dir === '.' || dir === '') && rootConfigFiles.has(base);
+    };
+    const expected = unassigned.filter(isRootConfig);
+    const unexpected = unassigned.filter((s) => !isRootConfig(s));
+
+    if (unexpected.length > 0) {
+      const sample = unexpected.slice(0, 3).map((s) => s.relativePath).join(', ');
+      warnings.push(
+        `${unexpected.length} file(s) sin rama declarada (no son config raíz típica): ` +
+          `${sample}${unexpected.length > 3 ? ', ...' : ''}. ` +
+          `Considerá agregarlos a una branch con \`storm branch add\`. ` +
+          `Detalle: ${path.join(COMPACT_DIR, UNASSIGNED_BRANCH + '.md')}.`,
+      );
+    }
+    if (expected.length > 0 && unexpected.length === 0) {
+      // Quiet info-level note — the user shouldn't worry about these.
+      warnings.push(
+        `${expected.length} archivo(s) raíz fuera de ramas (esperado: ` +
+          `${expected.slice(0, 3).map((s) => path.basename(s.relativePath)).join(', ')}` +
+          `${expected.length > 3 ? ', ...' : ''}).`,
+      );
+    }
   }
 
   // 6. Write the map.

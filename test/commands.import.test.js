@@ -325,3 +325,105 @@ test('writeImport with agent=opencode: writes .opencode/AGENTS.md, no .claude/co
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// OpenCode scaffolding (commit 5+6)
+//
+// agent=opencode → write .opencode/AGENTS.md + .opencode/commands/*.md
+// + .opencode/agents/*.md, AND AGENTS.md must index them.
+// ---------------------------------------------------------------------------
+
+test('writeImport with agent=opencode: writes .opencode/commands/ and .opencode/agents/', async () => {
+  const { dir, cleanup } = await tmpProject();
+  try {
+    await writeImport({
+      projectRoot: dir,
+      name: 'foo',
+      description: '',
+      stackId: 'other',
+      databaseId: 'none',
+      model: { provider: 'claude', name: null },
+      agent: 'opencode',
+      branches: [],
+      skills: [],
+      agents: [],
+    });
+
+    // The .opencode/commands/ directory must exist with multiple files.
+    const taskAdd = path.join(dir, '.opencode/commands/task-add.md');
+    const taskDone = path.join(dir, '.opencode/commands/task-done.md');
+    const refresh = path.join(dir, '.opencode/commands/refresh.md');
+    assert.ok(await exists(taskAdd),  'task-add.md should exist');
+    assert.ok(await exists(taskDone), 'task-done.md should exist');
+    assert.ok(await exists(refresh),  'refresh.md should exist');
+
+    // The .opencode/agents/ directory must have the builtins.
+    const taskRunner = path.join(dir, '.opencode/agents/task-runner.md');
+    const planner = path.join(dir, '.opencode/agents/planner.md');
+    assert.ok(await exists(taskRunner), 'task-runner.md should exist');
+    assert.ok(await exists(planner),    'planner.md should exist');
+
+    // No claude scaffold for opencode users.
+    assert.equal(await exists(path.join(dir, '.claude')), false,
+      '.claude/ should NOT exist for opencode');
+    assert.equal(await exists(path.join(dir, 'CLAUDE.md')), false,
+      'CLAUDE.md should NOT exist for opencode');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('writeImport with agent=opencode: AGENTS.md indexes commands and agents', async () => {
+  const { dir, cleanup } = await tmpProject();
+  try {
+    await writeImport({
+      projectRoot: dir,
+      name: 'foo',
+      description: '',
+      stackId: 'other',
+      databaseId: 'none',
+      model: { provider: 'claude', name: null },
+      agent: 'opencode',
+      branches: [],
+      skills: [],
+      agents: [],
+    });
+
+    const agentsMd = await readFile(path.join(dir, '.opencode/AGENTS.md'), 'utf8');
+    // The index points to the per-command files so OpenCode (which only
+    // auto-loads AGENTS.md) tells the LLM these references exist.
+    assert.match(agentsMd, /Storm CLI commands/i);
+    assert.match(agentsMd, /\.opencode\/commands\/task-add\.md/);
+    assert.match(agentsMd, /\.opencode\/commands\/task-done\.md/);
+    assert.match(agentsMd, /Storm roles/i);
+    assert.match(agentsMd, /\.opencode\/agents\/task-runner\.md/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('writeImport with agent=claude-code: AGENTS.md index NOT included', async () => {
+  const { dir, cleanup } = await tmpProject();
+  try {
+    await writeImport({
+      projectRoot: dir,
+      name: 'foo',
+      description: '',
+      stackId: 'other',
+      databaseId: 'none',
+      model: { provider: 'claude', name: null },
+      agent: 'claude-code',
+      branches: [],
+      skills: [],
+      agents: [],
+    });
+
+    const claudeMd = await readFile(path.join(dir, 'CLAUDE.md'), 'utf8');
+    // The OpenCode-specific index block should NOT appear in CLAUDE.md
+    // — claude-code uses its own .claude/commands/ directly.
+    assert.equal(/Storm CLI commands/i.test(claudeMd), false,
+      'OpenCode index should not appear in CLAUDE.md');
+  } finally {
+    await cleanup();
+  }
+});
