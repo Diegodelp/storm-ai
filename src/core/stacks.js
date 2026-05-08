@@ -288,7 +288,13 @@ export const DATABASES = [
   { id: 'planetscale', label: 'PlanetScale', hint: 'MySQL serverless con branching.' },
   { id: 'neon',      label: 'Neon',       hint: 'Postgres serverless.' },
   { id: 'redis',     label: 'Redis',      hint: 'Cache / clave-valor / colas.' },
-  { id: 'none',      label: 'Ninguna',    hint: 'No usa base de datos.' },
+  // Flat-file storage. Common in early-stage prototypes, Next.js demos,
+  // toy projects, content-driven sites. The LLM should pick this when
+  // the project's "data store" is just `.json` files (e.g. `data/*.json`)
+  // or a single SQLite file checked into the repo.
+  { id: 'flat-file-json', label: 'Flat-file JSON', hint: 'Archivos .json como almacenamiento (sin DB externa).' },
+  { id: 'sqlite-file',    label: 'SQLite (archivo)', hint: 'Archivo .sqlite/.db checkeado en el repo.' },
+  { id: 'none',      label: 'Ninguna',    hint: 'No usa persistencia (servicios stateless, etc).' },
   { id: 'other',     label: 'Otra... (texto libre)', hint: 'Describila a mano.' },
 ];
 

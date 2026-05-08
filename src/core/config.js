@@ -15,6 +15,8 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import { atomicWriteJson } from './atomic-io.js';
+
 const CONFIG_FILE = 'project.config.json';
 const CURRENT_VERSION = 1;
 
@@ -147,14 +149,18 @@ export async function readConfig(projectRoot) {
 }
 
 /**
+ * Write a project config atomically. Uses a tmp-file + rename strategy
+ * AND an in-process + cross-process lock so that concurrent storm
+ * subprocesses (e.g. an agent running `storm branch pin` in parallel)
+ * don't corrupt the file.
+ *
  * @param {string} projectRoot
  * @param {ProjectConfig} config
  */
 export async function writeConfig(projectRoot, config) {
   const p = path.join(projectRoot, CONFIG_FILE);
   await mkdir(path.dirname(p), { recursive: true });
-  // No BOM. Pretty-printed for human editing.
-  await writeFile(p, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  await atomicWriteJson(p, config);
 }
 
 /**

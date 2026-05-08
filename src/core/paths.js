@@ -101,7 +101,16 @@ export const projectPaths = {
   projectMap: (root) => path.join(root, '.context-compact', 'project-map.md'),
   branchMd: (root, branchPath) =>
     path.join(root, '.context-compact', branchPath.replaceAll('/', '-') + '.md'),
+  // Claude Code scaffolding (lives in .claude/).
+  claudeDir: (root) => path.join(root, '.claude'),
   claudeCommands: (root) => path.join(root, '.claude', 'commands'),
   claudeSkills: (root) => path.join(root, '.claude', 'skills'),
   claudeAgents: (root) => path.join(root, '.claude', 'agents'),
+  // OpenCode scaffolding (lives in .opencode/). The `agentsMd` is the
+  // equivalent of CLAUDE.md and is the file OpenCode reads first when
+  // starting a session in the project.
+  opencodeDir: (root) => path.join(root, '.opencode'),
+  opencodeAgentsMd: (root) => path.join(root, '.opencode', 'AGENTS.md'),
+  opencodeCommands: (root) => path.join(root, '.opencode', 'commands'),
+  opencodeAgents: (root) => path.join(root, '.opencode', 'agents'),
 };

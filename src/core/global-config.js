@@ -32,6 +32,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
+import { atomicWriteJson } from './atomic-io.js';
+
 const CONFIG_DIR = path.join(homedir(), '.storm-ai');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
@@ -72,12 +74,14 @@ export async function readGlobalConfig() {
 
 /**
  * Write the global config. Creates ~/.storm-ai/ if needed.
+ * Uses atomic write + lock so concurrent storm subprocesses don't
+ * corrupt the file.
  * @param {GlobalConfig} config
  */
 export async function writeGlobalConfig(config) {
   await mkdir(CONFIG_DIR, { recursive: true });
   const out = { ...config, updatedAt: new Date().toISOString() };
-  await writeFile(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n', 'utf8');
+  await atomicWriteJson(CONFIG_FILE, out);
 }
 
 // ---------------------------------------------------------------------------

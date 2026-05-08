@@ -32,7 +32,7 @@ test('empty branches: all files go to _unassigned with warning', async () => {
     const result = await refreshCompactContext(root, { branches: [] });
     assert.equal(result.filesScanned, 1);
     assert.equal(result.unassignedCount, 1);
-    assert.ok(result.warnings.some((w) => /outside declared/.test(w)));
+    assert.ok(result.warnings.some((w) => /sin rama declarada|raíz fuera de ramas/.test(w)))
     const unassigned = await readFile(
       path.join(root, '.context-compact', '_unassigned.md'),
       'utf8',

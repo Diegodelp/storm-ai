@@ -18,6 +18,8 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import { atomicWriteJson, atomicWrite } from './atomic-io.js';
+
 /** @typedef {'pending'|'in_progress'|'done'|'cancelled'} TaskStatus */
 
 /**
@@ -86,8 +88,7 @@ export async function readState(projectRoot) {
 export async function writeState(projectRoot, state) {
   const p = path.join(projectRoot, STATE_FILE);
   await mkdir(path.dirname(p), { recursive: true });
-  // UTF-8 WITHOUT BOM — node writeFile default already does this.
-  await writeFile(p, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  await atomicWriteJson(p, state);
 }
 
 /**
@@ -130,7 +131,7 @@ export async function regenerateTasksMd(projectRoot, state) {
     '',
   ];
 
-  await writeFile(path.join(projectRoot, TASKS_FILE), sections.join('\n'), 'utf8');
+  await atomicWrite(path.join(projectRoot, TASKS_FILE), sections.join('\n'));
 }
 
 // ---------------------------------------------------------------------------

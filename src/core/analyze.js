@@ -154,7 +154,12 @@ Constraints:
 ${stackOptions}
 - databaseId values: one of:
 ${dbOptions}
-- If you can't tell the database, use "none" or "other".
+- If the project stores data as .json files (e.g. data/*.json acting as
+  a flat database), use "flat-file-json" — NOT "none". "none" is only
+  for stateless apps with no persistence.
+- If the project commits a SQLite file (e.g. db.sqlite, prisma/dev.db),
+  use "sqlite-file".
+- If you genuinely can't tell the database, use "other".
 - Branches: only include directories that ACTUALLY EXIST in the listing below.
 - Skills/agents: only suggest things directly justified by what you see.
   If nothing obvious fits, return empty arrays. Don't pad with generic
