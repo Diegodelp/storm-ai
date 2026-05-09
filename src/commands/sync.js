@@ -28,6 +28,7 @@ import {
   suggestBranchDescription,
 } from '../core/stacks.js';
 import { refreshCompactContext } from '../core/compact.js';
+import { readState } from '../core/tasks.js';
 
 // Extensions that count as "real content" for staleness detection.
 // A branch is marked stale only if it has 0 files of any of these
@@ -135,7 +136,17 @@ export async function sync(opts) {
     await writeConfig(projectRoot, config);
     if (opts.regenerate !== false) {
       try {
-        await refreshCompactContext(projectRoot, { resetCounter: false });
+        // Pass the FULL config — branches, mapFilesPerBranch, ignoredPaths,
+        // and the current task list. Without this, refresh defaults to
+        // "no branches" and every file lands in _unassigned, undoing the
+        // sync that just ran.
+        const stateForRefresh = await readState(projectRoot).catch(() => ({ tasks: [] }));
+        await refreshCompactContext(projectRoot, {
+          branches: config.compact_context.branches,
+          mapFilesPerBranch: config.compact_context.map_files_per_branch,
+          ignoredPaths: config.compact_context.ignored_paths ?? [],
+          tasks: stateForRefresh.tasks ?? [],
+        });
       } catch (err) {
         report.warnings.push(
           `Falló la regeneración de .context-compact: ${err.message}`,
