@@ -174,8 +174,12 @@ export async function configureAgentForProject({ projectRoot, config, strict = f
       set(['provider', 'ollama', 'npm'], '@ai-sdk/openai-compatible');
       set(['provider', 'ollama', 'name'], 'Ollama');
       set(['provider', 'ollama', 'options', 'baseURL'], `${host}/v1`);
-      for (const name of new Set([...models.map((m) => m.name), selected])) {
-        set(['provider', 'ollama', 'models', name, 'name'], name);
+      // OpenCode only offers the models listed here. Cloud models are not
+      // "installed", so /api/tags rarely lists them: add the curated cloud
+      // catalog so the picker shows them (with a readable label).
+      const labels = new Map(provider === 'ollama-cloud' ? CLOUD_MODELS.map((m) => [m.name, m.label]) : []);
+      for (const name of new Set([selected, ...models.map((m) => m.name), ...labels.keys()])) {
+        set(['provider', 'ollama', 'models', name, 'name'], labels.get(name) ?? name);
       }
     } else if (selected) {
       set(['model'], provider === 'claude' ? `anthropic/${selected}` : selected);

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { parse } from 'jsonc-parser';
 import { createConfig, readConfig, writeConfig } from '../src/core/config.js';
 import { configureAgentForProject, syncAgentConfig } from '../src/core/agent-config.js';
-import { listOllamaModels } from '../src/core/providers.js';
+import { listOllamaModels, CLOUD_MODELS } from '../src/core/providers.js';
 import { applyTemplateToProject } from '../src/commands/new-from-template.js';
 
 async function fixture(t) {
@@ -73,7 +73,30 @@ test('Ollama cloud: chooses detected cloud models and excludes installed local m
   await configureAgentForProject({ projectRoot: root, config }, deps);
   const settings = await json(root, 'opencode.json');
   assert.equal(settings.model, 'ollama/kimi-k2.6:cloud');
-  assert.deepEqual(Object.keys(settings.provider.ollama.models), ['kimi-k2.6:cloud']);
+  const listed = Object.keys(settings.provider.ollama.models);
+  assert.ok(!listed.includes('qwen3.5:9b') && !listed.includes('custom:latest'), 'no local models');
+  // The whole curated cloud catalog is offered in OpenCode's picker, not only the detected one.
+  assert.deepEqual(listed.sort(), CLOUD_MODELS.map((m) => m.name).sort());
+  assert.equal(settings.provider.ollama.models['kimi-k2.6:cloud'].name, 'Kimi K2.6 (cloud)');
+});
+
+test('Ollama cloud: extra detected cloud models are listed next to the catalog', async (t) => {
+  const root = await fixture(t);
+  const config = configFor('opencode', 'ollama-cloud', 'gpt-oss:120b-cloud');
+  await configureAgentForProject({ projectRoot: root, config }, {
+    ...deps,
+    listModels: async () => [{ name: 'gpt-oss:120b-cloud' }, { name: 'qwen3.5:9b' }],
+  });
+  const settings = await json(root, 'opencode.json');
+  assert.equal(settings.model, 'ollama/gpt-oss:120b-cloud');
+  assert.equal(Object.keys(settings.provider.ollama.models).length, CLOUD_MODELS.length + 1);
+});
+
+test('Ollama local: the cloud catalog is not added', async (t) => {
+  const root = await fixture(t);
+  await configureAgentForProject({ projectRoot: root, config: configFor('opencode') }, deps);
+  const listed = Object.keys((await json(root, 'opencode.json')).provider.ollama.models);
+  assert.ok(!listed.some((m) => m.endsWith(':cloud')));
 });
 
 test('explicit custom models are retained and :latest aliases are resolved', async (t) => {
