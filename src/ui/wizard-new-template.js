@@ -150,7 +150,7 @@ export async function runNewFromTemplateWizard({ cwd, templateId = null, name = 
     const launchPick = await pickLaunchSettings({
       agent: await getDefaultAgent(),
       launchCommand: await getDefaultLaunchCommand(),
-      provider: defProvider?.provider ?? 'ollama-cloud',
+      provider: defProvider?.provider ?? null,
       model: defProvider?.model ?? null,
     });
     if (!launchPick) return cancelled();

@@ -242,3 +242,34 @@ test('getInstructionsFile: CLAUDE.md for Claude Code, root AGENTS.md otherwise',
   assert.equal(getInstructionsFile('opencode'), 'AGENTS.md');
   assert.equal(getInstructionsFile('aider'), 'AGENTS.md');
 });
+
+// ---------------------------------------------------------------------------
+// Provider suggestion (no Ollama → the agent's own via-* provider)
+// ---------------------------------------------------------------------------
+
+import { suggestProvider } from '../src/core/agents.js';
+import { isOllamaAvailable } from '../src/core/providers.js';
+
+test('suggestProvider: keeps a usable preference', () => {
+  assert.equal(suggestProvider({ agentId: 'opencode', preferred: 'ollama-cloud', ollamaAvailable: true }), 'ollama-cloud');
+  assert.equal(suggestProvider({ agentId: 'opencode', preferred: 'claude', ollamaAvailable: false }), 'claude');
+});
+
+test('suggestProvider: without Ollama, Ollama preferences fall back to the agent via-* provider', () => {
+  assert.equal(suggestProvider({ agentId: 'opencode', preferred: 'ollama-cloud', ollamaAvailable: false }), 'via-opencode');
+  assert.equal(suggestProvider({ agentId: 'claude-code', preferred: 'ollama-local', ollamaAvailable: false }), 'via-claude-code');
+  assert.equal(suggestProvider({ agentId: 'opencode', preferred: null, ollamaAvailable: true }), 'via-opencode');
+});
+
+test('suggestProvider: no agent and no preference', () => {
+  assert.equal(suggestProvider({ preferred: null, ollamaAvailable: true }), 'ollama-cloud');
+  assert.equal(suggestProvider({ preferred: null, ollamaAvailable: false }), 'claude');
+});
+
+test('isOllamaAvailable: CLI or reachable daemon', async () => {
+  const noCli = async () => ({ installed: false });
+  const host = async () => 'http://gpu:11434';
+  assert.equal(await isOllamaAvailable({ detect: async () => ({ installed: true }) }), true);
+  assert.equal(await isOllamaAvailable({ detect: noCli, getHost: host, fetchImpl: async () => ({ ok: true }) }), true);
+  assert.equal(await isOllamaAvailable({ detect: noCli, getHost: host, fetchImpl: async () => { throw new Error('ECONNREFUSED'); } }), false);
+});

@@ -723,7 +723,11 @@ export async function runImportNonInteractive(input) {
   let provider = input.provider;
   let model = input.model ?? null;
   if (!provider) {
-    const def = (await getDefaultProvider()) ?? (input.skipLLM ? { provider: 'claude', model: null } : null);
+    // --skip-llm needs no analysis provider: launch with the agent's own
+    // via-* provider (resolved below) instead of forcing Anthropic.
+    const agentForDefault = input.agent ?? (await getDefaultAgent());
+    const def = (await getDefaultProvider()) ??
+      (input.skipLLM ? { provider: getAgent(agentForDefault)?.nativeProvider ?? 'claude', model: null } : null);
     if (!def) {
       throw new Error(
         'No provider configured. Pass --provider or set a default with `storm config`.',

@@ -117,6 +117,12 @@ downloads one automatically. Discovery also works against a remote daemon
 without an Ollama CLI installed on this machine. Changing providers with
 `storm config set provider` clears the old model.
 
+If Ollama isn't installed (and no daemon answers at `OLLAMA_HOST`), the
+wizards pre-select the agent's own provider (`via-opencode` /
+`via-claude-code`): the CLI keeps using the models you configured in it.
+The Ollama options are flagged and ask for confirmation. New projects with
+no global default provider also start with the agent's `via-*` provider.
+
 Projects keep their own provider/model/agent: change them with
 `storm project` (see "Editing a project's agent / provider / model").
 

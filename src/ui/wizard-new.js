@@ -193,7 +193,7 @@ export async function runNewWizard({ cwd }) {
   const launchPick = await pickLaunchSettings({
     agent: await getDefaultAgent(),
     launchCommand: await getDefaultLaunchCommand(),
-    provider: defProvider?.provider ?? 'ollama-cloud',
+    provider: defProvider?.provider ?? null,
     model: defProvider?.model ?? null,
   });
   if (!launchPick) return cancel();
