@@ -27,7 +27,8 @@ function wizardFixture(overrides = {}) {
     intro: log, note: log, cancel: log,
     log: { info: log, error: log, warn: log },
     spinner: () => ({ start: log, stop: log }),
-    select: async () => project.root,
+    // First prompt picks the project, the second one the action.
+    select: async ({ message }) => (message === 'Elegí un proyecto' ? project.root : 'open'),
     isCancel: (value) => typeof value === 'symbol',
   };
   return {
@@ -100,6 +101,19 @@ test('discovery errors stop the spinner and reach the menu error handler', async
   });
   assert.ok(fixture.messages.includes('Falló la búsqueda de proyectos'));
   assert.deepEqual(events, ['sin acceso a la carpeta', 'acknowledge']);
+});
+
+test('the settings action edits the project and comes back before launching', async () => {
+  const edited = [];
+  let step = 0;
+  const fixture = wizardFixture({ editSettings: async ({ projectRoot }) => { edited.push(projectRoot); } });
+  fixture.deps.ui.select = async ({ message }) => {
+    if (message === 'Elegí un proyecto') return fixture.project.root;
+    return ['settings', 'open'][step++];
+  };
+  assert.equal(await runOpenWizard({}, fixture.deps), 'done');
+  assert.deepEqual(edited, [fixture.project.root]);
+  assert.equal(fixture.launched(), 1);
 });
 
 test('cancelling project selection returns directly without launching or pausing', async () => {

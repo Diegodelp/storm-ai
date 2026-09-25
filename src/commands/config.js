@@ -6,11 +6,14 @@
  *   2. `storm config get/set`    → scriptable get/set of individual keys.
  *
  * The keys we support are intentionally narrow:
- *   - provider                   (ollama-cloud | ollama-local | claude)
- *   - model                      (free string)
+ *   - provider                   (any id from PROVIDERS; changing it clears model)
+ *   - model                      (only for providers that take one: ollama-*)
  *   - agent                      (claude-code | opencode | <other>)
  *   - launchCommand              (free shell string with {{model}} placeholder)
  *   - ollamaHost                 (http://...)
+ *
+ * These are defaults for NEW projects (and the provider `storm import`
+ * analyzes with). Existing projects are edited with `storm project`.
  *
  * For more advanced config (or to inspect the full file), the user can
  * always edit ~/.storm-ai/config.json by hand.
@@ -25,6 +28,7 @@ import {
   setOllamaHost,
   CONFIG_FILE_PATH,
 } from '../core/global-config.js';
+import { validateProviderModel, providerNeedsModel } from '../core/providers.js';
 
 /**
  * @typedef {'provider'|'model'|'agent'|'launchCommand'|'ollamaHost'} ConfigKey
@@ -84,30 +88,69 @@ export async function setConfigValue(key, value) {
       `Clave desconocida: ${key}. Válidas: ${[...VALID_KEYS].join(', ')}.`,
     );
   }
+  const v = typeof value === 'string' ? value.trim() : value;
   switch (key) {
     case 'provider': {
+      if (!v) {
+        await setDefaultProvider(null);
+        return;
+      }
+      const err = validateProviderModel(v, null);
+      if (err) throw new Error(err);
       const cfg = await readGlobalConfig();
-      // Model names belong to a provider; never carry an Ollama model into Claude.
-      const model = cfg.defaultProvider?.provider === value ? cfg.defaultProvider.model ?? null : null;
-      await setDefaultProvider({ provider: value, model });
+      // A model only makes sense for the provider it was picked for.
+      const keepModel = cfg.defaultProvider?.provider === v ? cfg.defaultProvider.model : null;
+      await setDefaultProvider({ provider: v, model: keepModel ?? null });
       return;
     }
     case 'model': {
       const cfg = await readGlobalConfig();
-      const provider = cfg.defaultProvider?.provider ?? 'ollama-cloud';
-      await setDefaultProvider({ provider, model: value });
+      const provider = cfg.defaultProvider?.provider;
+      if (!v) {
+        if (provider) await setDefaultProvider({ provider, model: null });
+        return;
+      }
+      if (!provider) {
+        throw new Error('Primero elegí un provider: storm config set provider <id>.');
+      }
+      if (!providerNeedsModel(provider)) {
+        throw new Error(validateProviderModel(provider, v));
+      }
+      const err = validateProviderModel(provider, v);
+      if (err) throw new Error(err);
+      await setDefaultProvider({ provider, model: v });
       return;
     }
     case 'agent':
-      await setDefaultAgent(value);
+      await setDefaultAgent(v || 'claude-code');
       return;
     case 'launchCommand':
-      await setDefaultLaunchCommand(value);
+      await setDefaultLaunchCommand(v || null);
       return;
     case 'ollamaHost':
-      await setOllamaHost(value);
+      if (v) {
+        // Same forms Ollama accepts: a full URL or host:port.
+        let url;
+        try { url = new URL(v.includes('://') ? v : `http://${v}`); } catch { url = null; }
+        if (!url || !['http:', 'https:'].includes(url.protocol)) {
+          throw new Error('ollamaHost debe ser una URL http(s) o host:puerto.');
+        }
+      }
+      await setOllamaHost(v || null);
       return;
   }
+}
+
+/**
+ * Set provider and model together (what the wizard uses, so the global
+ * config never ends up with a provider paired with another's model).
+ * @param {string} provider
+ * @param {string|null} model
+ */
+export async function setProviderAndModel(provider, model) {
+  const err = validateProviderModel(provider, model);
+  if (err) throw new Error(err);
+  await setDefaultProvider({ provider, model: model || null });
 }
 
 /** Reset config to factory defaults. */

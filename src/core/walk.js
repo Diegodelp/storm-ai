@@ -55,6 +55,7 @@ export const IGNORED_FILES = new Set([
   // _unassigned forever and the warning "5 files in _unassigned" would
   // be permanently noisy on every refresh.
   'CLAUDE.md',
+  'AGENTS.md',
   'TASKS.md',
   'project.config.json',
 ]);

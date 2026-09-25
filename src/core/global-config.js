@@ -1,16 +1,18 @@
 /**
  * Global storm-ai config (machine-wide preferences).
  *
- * Lives at ~/.storm-ai/config.json and stores user preferences that
- * apply across all projects:
- *   - default AI provider + model (used by `storm import` and as
- *     a default in the wizards)
- *   - default agent (Claude Code, OpenCode, ...)
- *   - default custom launch command (advanced)
- *   - OLLAMA_HOST override (advanced)
+ * Lives at ~/.storm-ai/config.json and stores user preferences:
+ *   - default AI provider + model: used by `storm import` to analyze
+ *     projects, and as the default for NEW projects
+ *   - default agent (Claude Code, OpenCode, ...) for NEW projects
+ *   - default custom launch command for NEW projects, and the fallback
+ *     for projects whose agent storm doesn't know
+ *   - OLLAMA_HOST (used by `storm import`, model listing and launch;
+ *     the OLLAMA_HOST env var wins over it)
  *
- * Per-project config still lives in <project>/project.config.json — this
- * is for things that aren't project-specific.
+ * Existing projects are NOT affected by changes here: each one keeps its
+ * own provider/model/agent in <project>/project.config.json, editable
+ * with `storm project`.
  *
  * The schema is forward-compatible: unknown fields are preserved. Reading
  * a missing or corrupt file returns sensible defaults (no exception).
@@ -18,7 +20,7 @@
  * Schema:
  *   {
  *     "defaultProvider": {
- *       "provider": "ollama-cloud" | "ollama-local" | "claude",
+ *       "provider": <id from PROVIDERS in core/providers.js>,
  *       "model": "kimi-k2.6:cloud" | null
  *     },
  *     "defaultAgent": "claude-code" | "opencode" | <other>,
@@ -31,11 +33,14 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import process from 'node:process';
 
 import { atomicWriteJson } from './atomic-io.js';
 
-const CONFIG_DIR = path.join(homedir(), '.storm-ai');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+// Resolved on every call (not at import time) so HOME overrides — tests,
+// wrappers — take effect.
+const configDir = () => path.join(homedir(), '.storm-ai');
+const configFile = () => path.join(configDir(), 'config.json');
 
 /**
  * @typedef {Object} GlobalConfig
@@ -62,7 +67,7 @@ function emptyConfig() {
  */
 export async function readGlobalConfig() {
   try {
-    const raw = await readFile(CONFIG_FILE, 'utf8');
+    const raw = await readFile(configFile(), 'utf8');
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return emptyConfig();
     // Merge with defaults so missing fields are filled in.
@@ -79,9 +84,9 @@ export async function readGlobalConfig() {
  * @param {GlobalConfig} config
  */
 export async function writeGlobalConfig(config) {
-  await mkdir(CONFIG_DIR, { recursive: true });
+  await mkdir(configDir(), { recursive: true });
   const out = { ...config, updatedAt: new Date().toISOString() };
-  await atomicWriteJson(CONFIG_FILE, out);
+  await atomicWriteJson(configFile(), out);
 }
 
 // ---------------------------------------------------------------------------
@@ -101,14 +106,13 @@ export async function getDefaultProvider() {
 }
 
 /**
- * @param {{provider: string, model: string|null}} input
+ * @param {{provider: string, model: string|null}|null} input  null clears it.
  */
 export async function setDefaultProvider(input) {
   const cfg = await readGlobalConfig();
-  cfg.defaultProvider = {
-    provider: input.provider,
-    model: input.model ?? null,
-  };
+  cfg.defaultProvider = input?.provider
+    ? { provider: input.provider, model: input.model ?? null }
+    : null;
   await writeGlobalConfig(cfg);
 }
 
@@ -165,9 +169,9 @@ export async function getOllamaHost() {
  */
 export async function setOllamaHost(host) {
   const cfg = await readGlobalConfig();
-  cfg.ollamaHost = host;
+  cfg.ollamaHost = host || 'http://127.0.0.1:11434';
   await writeGlobalConfig(cfg);
 }
 
 /** Path of the config file (for the wizard "open in editor" hint). */
-export const CONFIG_FILE_PATH = CONFIG_FILE;
+export const CONFIG_FILE_PATH = configFile();

@@ -99,6 +99,23 @@ test('via-opencode: reads text from JSON events', async () => {
   }
 });
 
+test('via-opencode: only passes flags `opencode run` accepts (no --print)', { skip: isWindows }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'storm-fakecli-'));
+  const file = path.join(dir, 'opencode');
+  // Echo the argv back (as an OpenCode text event) so we can assert on it.
+  // Consume stdin like the real CLI, otherwise the prompt write can EPIPE.
+  await writeFile(file, `#!/bin/sh\ncat >/dev/null\nprintf '{"type":"text","part":{"text":"args=[%s]"}}\\n' "$*"\n`, 'utf8');
+  await chmod(file, 0o755);
+  try {
+    await withPath(dir, async () => {
+      const out = await complete({ provider: 'via-opencode', prompt: 'ping' });
+      assert.equal(out.trim(), 'args=[run --format json]');
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('via-claude-code: missing binary throws clear error', async () => {
   // Use a guaranteed-empty path so `claude` is definitely not found.
   const oldPath = process.env.PATH;

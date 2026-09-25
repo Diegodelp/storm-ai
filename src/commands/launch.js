@@ -1,15 +1,19 @@
 /**
  * `storm launch` — open the project by spawning the configured agent.
  *
+ * Everything comes from the PROJECT's project.config.json (`model`,
+ * `agent`, `launch.customCommand`). The global config (~/.storm-ai) only
+ * provides defaults when a project is created, plus two fallbacks:
+ *   - `defaultLaunchCommand` for agents storm doesn't know (custom ones)
+ *     when the project has no command of its own.
+ *   - `ollamaHost`, exported as OLLAMA_HOST for Ollama providers (the
+ *     OLLAMA_HOST env var wins over it).
+ *
  * The (provider, agent, model) tuple decides what to spawn:
  *   - Ollama + Claude Code → native settings + `claude --model <m>`
  *   - Ollama + OpenCode    → native config + `opencode --model ollama/<m>`
  *   - Claude API + Claude Code   → `claude`
  *   - Claude API + OpenCode      → `opencode`
- *
- * The user can override completely by setting `customCommand` in the
- * project's config, which we shell-split as the spawn target. Useful
- * for invoking Aider, gemini, custom scripts, etc.
  *
  * stdio:'inherit' lets the agent take full control of the terminal.
  * On exit, control returns to storm.
@@ -17,11 +21,12 @@
 
 import { spawn } from 'node:child_process';
 import { platform } from 'node:os';
+import process from 'node:process';
 
 import { readConfig } from '../core/config.js';
 import { requireProjectRoot } from '../core/paths.js';
-import { buildAgentLaunchCommand } from '../core/agents.js';
-import { getOllamaHost } from '../core/global-config.js';
+import { buildAgentLaunchCommand, getAgent } from '../core/agents.js';
+import { getOllamaHost, readGlobalConfig } from '../core/global-config.js';
 import { syncAgentConfig } from '../core/agent-config.js';
 
 /**
@@ -31,6 +36,46 @@ import { syncAgentConfig } from '../core/agent-config.js';
 export async function launch(input) {
   const root = await requireProjectRoot(input.cwd);
   return launchForProject({ projectRoot: root });
+}
+
+/**
+ * Decide what to spawn for a project. Pure: no I/O, easy to test.
+ *
+ * @param {{
+ *   config: import('../core/config.js').ProjectConfig,
+ *   globalConfig?: import('../core/global-config.js').GlobalConfig,
+ *   modelName?: string|null,   Resolved model (defaults to config.model.name).
+ *   ollamaHost?: string,       Resolved host for Ollama providers.
+ * }} input
+ * @returns {{command: string, args: string[], env: Record<string,string>, agentId: string, provider: string, modelName: string|null}}
+ */
+export function resolveLaunch({ config, globalConfig = {}, modelName, ollamaHost }) {
+  const provider = config.model?.provider ?? 'claude';
+  const model = modelName === undefined ? config.model?.name ?? null : modelName;
+  const agentId = config.agent ?? 'claude-code';
+
+  // Project command wins. For an agent storm doesn't know, fall back to
+  // the global command so custom agents configured via `storm config`
+  // keep working in projects that predate the per-project setting.
+  let customCommand = config.launch?.customCommand || null;
+  if (!customCommand && !getAgent(agentId)) {
+    customCommand = globalConfig.defaultLaunchCommand || null;
+  }
+
+  const { command, args } = buildAgentLaunchCommand({
+    provider,
+    agentId,
+    modelName: model,
+    customCommand,
+  });
+
+  /** @type {Record<string,string>} */
+  const env = {};
+  if (ollamaHost && (provider === 'ollama-cloud' || provider === 'ollama-local')) {
+    env.OLLAMA_HOST = ollamaHost;
+  }
+
+  return { command, args, env, agentId, provider, modelName: model };
 }
 
 /**
@@ -44,29 +89,24 @@ export async function launchForProject(input) {
   for (const warning of prepared.warnings) console.warn(warning);
   const config = await readConfig(input.projectRoot);
   const provider = config.model?.provider ?? 'claude';
-  const modelName = prepared.modelName;
-  const agentId = config.agent ?? 'claude-code';
-  const customCommand = config.launch?.customCommand ?? null;
-
-  const { command, args } = buildAgentLaunchCommand({
-    provider,
-    agentId,
-    modelName,
-    customCommand,
-  });
-
   // Keep subprocesses pointed at the same host used for project analysis.
-  const env = { ...process.env };
-  if (provider === 'ollama-cloud' || provider === 'ollama-local') {
-    env.OLLAMA_HOST = await getOllamaHost();
-  }
+  const ollamaHost = provider === 'ollama-cloud' || provider === 'ollama-local'
+    ? await getOllamaHost()
+    : undefined;
+
+  const { command, args, env } = resolveLaunch({
+    config,
+    globalConfig: await readGlobalConfig(),
+    modelName: prepared.modelName,
+    ollamaHost,
+  });
 
   return new Promise((resolve, reject) => {
     const proc = spawn(command, args, {
       cwd: input.projectRoot,
       stdio: 'inherit',
       shell: platform() === 'win32',
-      env,
+      env: { ...process.env, ...env },
     });
     proc.on('error', (err) => {
       const detail = err.code === 'ENOENT'

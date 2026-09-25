@@ -2,7 +2,8 @@
  * Minimal LLM client used by `storm import`.
  *
  * Five backends:
- *   - 'ollama-cloud' / 'ollama-local': POSTs to OLLAMA_HOST/api/generate
+ *   - 'ollama-cloud' / 'ollama-local': POSTs to <ollama host>/api/generate
+ *     (OLLAMA_HOST env var, else `ollamaHost` from the global config)
  *     with the chosen model name. Cloud models include the ":cloud" suffix
  *     and Ollama itself routes the request to ollama.com — we never hit
  *     ollama.com directly.

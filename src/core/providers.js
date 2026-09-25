@@ -1,5 +1,5 @@
 /**
- * Model provider detection and model listing.
+ * Model provider catalog, validation, detection and model listing.
  *
  * The catalog covers direct Anthropic/Ollama access and CLI delegation.
  * Ollama models can be local (detected via `ollama list`) or cloud
@@ -80,6 +80,56 @@ export const PROVIDERS = Object.freeze([
  */
 export function getProvider(id) {
   return PROVIDERS.find((p) => p.id === id) ?? null;
+}
+
+/**
+ * Does this provider need a model name? (Ollama ones do; the rest pick
+ * the model themselves.)
+ * @param {string} id
+ * @returns {boolean}
+ */
+export function providerNeedsModel(id) {
+  return getProvider(id)?.hasModelPicker ?? false;
+}
+
+/**
+ * Ollama cloud models are tagged `:cloud` (kimi-k2.6:cloud) or end in
+ * `-cloud` (gpt-oss:120b-cloud).
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isCloudModelName(name) {
+  return isCloudModel(String(name ?? '').trim());
+}
+
+/**
+ * Validate a (provider, model) pair. Returns an error message, or null
+ * when the pair is valid. Used by `storm config`, `storm project` and
+ * the non-interactive flags so they all accept the same things.
+ *
+ * @param {string} provider
+ * @param {string|null|undefined} model
+ * @returns {string|null}
+ */
+export function validateProviderModel(provider, model) {
+  if (!getProvider(provider)) {
+    return `Provider desconocido: "${provider}". Válidos: ${PROVIDERS.map((p) => p.id).join(', ')}.`;
+  }
+  if (!providerNeedsModel(provider)) {
+    return model
+      ? `El provider "${provider}" no usa un modelo elegido por storm (lo decide ${
+          provider === 'claude' ? 'la API de Anthropic' : 'el CLI'
+        }). No pases un modelo.`
+      : null;
+  }
+  if (!model) return null; // Allowed while configuring; launch will complain.
+  if (provider === 'ollama-cloud' && !isCloudModelName(model)) {
+    return `"${model}" no es un modelo cloud (terminan en ":cloud" o "-cloud"). ¿Querías ollama-local?`;
+  }
+  if (provider === 'ollama-local' && isCloudModelName(model)) {
+    return `"${model}" es un modelo cloud. Usá el provider ollama-cloud.`;
+  }
+  return null;
 }
 
 /**
