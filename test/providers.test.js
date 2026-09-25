@@ -37,16 +37,16 @@ test('LOCAL_RECOMMENDED entries are well-formed and do NOT end in :cloud', () =>
   }
 });
 
-test('buildCommand for ollama-cloud: uses `ollama launch claude --model`', () => {
+test('buildCommand for ollama-cloud: uses `claude --model` with native settings', () => {
   const r = buildCommand({ provider: 'ollama-cloud', modelName: 'kimi-k2.6:cloud' });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'claude', '--model', 'kimi-k2.6:cloud']);
+  assert.equal(r.command, 'claude');
+  assert.deepEqual(r.args, ['--model', 'kimi-k2.6:cloud']);
 });
 
 test('buildCommand for ollama-local: same as cloud', () => {
   const r = buildCommand({ provider: 'ollama-local', modelName: 'glm-4.7-flash' });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'claude', '--model', 'glm-4.7-flash']);
+  assert.equal(r.command, 'claude');
+  assert.deepEqual(r.args, ['--model', 'glm-4.7-flash']);
 });
 
 test('buildCommand for claude provider: runs `claude` directly', () => {
@@ -58,10 +58,10 @@ test('buildCommand for claude provider: runs `claude` directly', () => {
 test('buildCommand for unknown provider throws (no fallback)', () => {
   // The new agent-aware launcher throws when the provider is unknown,
   // because there's no launch template for it. Users who need this
-  // should configure a custom launch command via `storm config`.
+  // should configure a custom launch command via `storm project`.
   assert.throws(
     () => buildCommand({ provider: 'some-future-thing', modelName: null }),
-    /no tiene un launch template/,
+    /no se puede lanzar con el provider/,
   );
 });
 
@@ -129,4 +129,27 @@ test('getProvider: returns the entry by id', () => {
   const p = getProvider('via-opencode');
   assert.ok(p);
   assert.equal(p.label, 'Via OpenCode CLI');
+});
+
+// ---------------------------------------------------------------------------
+// Provider/model validation
+// ---------------------------------------------------------------------------
+
+import { validateProviderModel, isCloudModelName } from '../src/core/providers.js';
+
+test('isCloudModelName: accepts :cloud and -cloud tags', () => {
+  assert.equal(isCloudModelName('kimi-k2.6:cloud'), true);
+  assert.equal(isCloudModelName('gpt-oss:120b-cloud'), true);
+  assert.equal(isCloudModelName('qwen3.5:9b'), false);
+});
+
+test('validateProviderModel', () => {
+  assert.equal(validateProviderModel('ollama-cloud', 'kimi-k2.6:cloud'), null);
+  assert.equal(validateProviderModel('ollama-local', 'qwen3.5:9b'), null);
+  assert.equal(validateProviderModel('via-opencode', null), null);
+  assert.equal(validateProviderModel('ollama-cloud', null), null, 'model may be filled in later');
+  assert.match(validateProviderModel('nope', null), /Provider desconocido/);
+  assert.match(validateProviderModel('claude', 'kimi-k2.6:cloud'), /no usa un modelo/);
+  assert.match(validateProviderModel('ollama-cloud', 'qwen3.5:9b'), /no es un modelo cloud/);
+  assert.match(validateProviderModel('ollama-local', 'kimi-k2.6:cloud'), /es un modelo cloud/);
 });

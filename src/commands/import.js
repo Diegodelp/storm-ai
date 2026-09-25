@@ -20,11 +20,19 @@ import { scanProject, buildAnalysisPrompt } from '../core/analyze.js';
 import { complete } from '../core/llm-client.js';
 import { parseAnalysis } from '../core/parse-analysis.js';
 import { createConfig, writeConfig, readConfig } from '../core/config.js';
+import { syncAgentConfig } from '../core/agent-config.js';
 import { refreshCompactContext } from '../core/compact.js';
 import { writeState, regenerateTasksMd } from '../core/tasks.js';
 import { projectPaths } from '../core/paths.js';
 import { getStack, getDatabase } from '../core/stacks.js';
-import { getDefaultProvider, getDefaultAgent } from '../core/global-config.js';
+import { getDefaultProvider, getDefaultAgent, getDefaultLaunchCommand } from '../core/global-config.js';
+import {
+  getAgent,
+  getInstructionsFile,
+  isProviderCompatible,
+  resolveLaunchModel,
+} from '../core/agents.js';
+import { validateProviderModel } from '../core/providers.js';
 import { sync } from './sync.js';
 import {
   BUILTIN_OPENCODE_COMMANDS,
@@ -38,7 +46,7 @@ import {
  * @typedef {Object} AnalyzeArgs
  * @property {string} cwd                      Project directory to import.
  * @property {'shallow'|'deep'} mode
- * @property {string} provider                 'ollama-cloud' | 'ollama-local' | 'claude'
+ * @property {string} provider                 Any id from PROVIDERS (core/providers.js).
  * @property {string|null} [model]
  */
 
@@ -76,7 +84,11 @@ export async function analyzeForImport(args) {
  * @property {string} stackId
  * @property {string} databaseId
  * @property {{provider: string, name: string|null}} model
+ *   Provider/model used to LAUNCH the agent in this project (not the one
+ *   used to analyze it). Must be compatible with the agent.
  * @property {string} [agent]                  CLI agent id. Default: global default.
+ * @property {{customCommand?: string}} [launch]
+ *   Default: global launchCommand, only for agents storm doesn't know.
  * @property {Array<{path: string, description?: string}>} branches
  * @property {Array<{name: string, builtin?: boolean, description?: string}>} skills
  * @property {Array<{name: string, slash: string, description?: string}>} agents
@@ -110,10 +122,9 @@ export async function detectConflicts(projectRoot) {
     opencodeDir:      await pathExists(path.join(projectRoot, '.opencode')),
     opencodeCommands: await pathExists(path.join(projectRoot, '.opencode/commands')),
     opencodeAgents:   await pathExists(path.join(projectRoot, '.opencode/agents')),
-    // AGENTS.md is the equivalent of CLAUDE.md for OpenCode users —
-    // either at .opencode/AGENTS.md or at the project root.
-    agentsMd:         await pathExists(path.join(projectRoot, '.opencode/AGENTS.md')) ||
-                      await pathExists(path.join(projectRoot, 'AGENTS.md')),
+    // AGENTS.md is the equivalent of CLAUDE.md for OpenCode and other
+    // agents. OpenCode reads it from the project root.
+    agentsMd:         await pathExists(path.join(projectRoot, 'AGENTS.md')),
   };
 }
 
@@ -171,6 +182,20 @@ export async function writeImport(plan) {
   // Resolve which agent to use: explicit plan.agent > global default > 'claude-code'.
   const resolvedAgent = plan.agent ?? (await getDefaultAgent());
 
+  // The stored model is what `storm launch` uses, so it has to be able to
+  // drive the agent. Callers normally resolve this already; this is the
+  // safety net (e.g. analysis provider via-opencode + agent claude-code).
+  const launchModel = resolveLaunchModel(
+    { provider: plan.model?.provider ?? 'claude', name: plan.model?.name ?? plan.model?.model ?? null },
+    resolvedAgent,
+  );
+  if (launchModel.adjusted) {
+    result.warnings.push(
+      `El provider "${plan.model.provider}" no puede lanzar ${getAgent(resolvedAgent).label}; ` +
+      `el proyecto queda con "${launchModel.model.provider}". Cambialo con \`storm project\`.`,
+    );
+  }
+
   // Create scaffold subdirs only for the agent the user actually uses.
   if (resolvedAgent === 'claude-code') {
     await mkdir(projectPaths.claudeCommands(plan.projectRoot), { recursive: true });
@@ -187,8 +212,9 @@ export async function writeImport(plan) {
     stackId: plan.stackId,
     database: dbPreset?.label ?? '',
     databaseId: plan.databaseId,
-    model: plan.model,
+    model: launchModel.model,
     agent: resolvedAgent,
+    launch: plan.launch ?? (await defaultLaunchFor(resolvedAgent)),
     skills: allSkills,
     agents: (plan.agents ?? []).map((a) => ({
       name: a.name,
@@ -210,9 +236,9 @@ export async function writeImport(plan) {
     result.createdFiles.push('project.config.json');
   }
 
-  // Write the agent instructions file. Filename + location depend on
-  // which agent the user picked (claude-code → CLAUDE.md at root,
-  // opencode → .opencode/AGENTS.md, anything else → AGENTS.md at root).
+  // Write the agent instructions file. Filename depends on which agent
+  // the user picked (claude-code → CLAUDE.md, anything else → AGENTS.md;
+  // both at the root, which is where the agents look for them).
   const agentMd = renderAgentMd({ config });
   const agentMdPath = path.join(plan.projectRoot, agentMd.filename);
   if (plan.overwriteClaudeMd === false &&
@@ -276,11 +302,8 @@ export async function writeImport(plan) {
     // storm's own commands and the user shouldn't have hand-edited them).
     await writeBuiltinCommands(plan.projectRoot, result);
   } else if (resolvedAgent === 'opencode') {
-    // OpenCode-specific scaffolding: knowledge-base files under
-    // .opencode/commands/ and .opencode/agents/ that AGENTS.md indexes.
-    // OpenCode auto-loads AGENTS.md but does NOT execute the per-command
-    // files as slash commands — they're documentation the LLM reads when
-    // the user asks for a specific operation.
+    // OpenCode-specific scaffolding: files under .opencode/commands/ and
+    // .opencode/agents/ (OpenCode loads both) that AGENTS.md indexes.
     await mkdir(projectPaths.opencodeCommands(plan.projectRoot), { recursive: true });
     await mkdir(projectPaths.opencodeAgents(plan.projectRoot), { recursive: true });
 
@@ -343,7 +366,7 @@ export async function writeImport(plan) {
         `Sync agregó ${syncReport.added.length} branch(es) detectada(s) en el filesystem: ${names}`,
       );
 
-      // The agent instructions file (CLAUDE.md / .opencode/AGENTS.md) was
+      // The agent instructions file (CLAUDE.md / AGENTS.md) was
       // generated BEFORE sync ran, so its "Branches" section is now stale.
       // Re-render it with the post-sync config so the LLM sees the
       // complete picture.
@@ -363,12 +386,27 @@ export async function writeImport(plan) {
     result.warnings.push(`Sync post-import falló: ${err.message}`);
   }
 
+  // Read the saved config, including when overwriteConfig=false preserved it.
+  try {
+    const native = await syncAgentConfig(plan.projectRoot);
+    result.createdFiles.push(...native.createdFiles);
+    result.warnings.push(...native.warnings);
+  } catch (err) {
+    result.warnings.push(`No pude autoconfigurar el CLI: ${err.message}`);
+  }
   return result;
 }
 
 // ---------------------------------------------------------------------------
 // Templates / helpers
 // ---------------------------------------------------------------------------
+
+/** Same rule as `storm new`: the global command is for unknown agents. */
+async function defaultLaunchFor(agentId) {
+  if (getAgent(agentId)) return {};
+  const cmd = await getDefaultLaunchCommand();
+  return cmd ? { customCommand: cmd } : {};
+}
 
 async function pathExists(p) {
   try {
@@ -409,10 +447,9 @@ function slugify(s) {
  * @param {string} [args.agentId]    'claude-code' | 'opencode' | other.
  *                                    Defaults to config.agent.
  * @returns {{ filename: string, content: string }}
- *   - filename:  relative path inside projectRoot. Examples:
- *                  'CLAUDE.md'                 (claude-code)
- *                  '.opencode/AGENTS.md'        (opencode)
- *                  'AGENTS.md'                  (anything else / custom)
+ *   - filename:  relative path inside projectRoot:
+ *                  'CLAUDE.md'   (claude-code)
+ *                  'AGENTS.md'   (opencode, anything else / custom)
  */
 function renderAgentMd({ config, agentId }) {
   const agent = agentId ?? config.agent ?? 'claude-code';
@@ -448,19 +485,13 @@ function renderAgentMd({ config, agentId }) {
       stackPreset.branchPatterns.map((p) => `- \`${p}\``).join('\n') + '\n'
     : '';
 
-  // Filename / location depends on the agent. OpenCode looks for
-  // `.opencode/AGENTS.md` by convention; Claude Code reads `CLAUDE.md`
-  // from the project root; anything else gets a generic top-level
-  // `AGENTS.md` so a human or another tool can still find it.
-  const filename =
-    agent === 'opencode'    ? '.opencode/AGENTS.md' :
-    agent === 'claude-code' ? 'CLAUDE.md' :
-    'AGENTS.md';
+  // Filename depends on the agent: Claude Code reads CLAUDE.md, OpenCode
+  // (and most other agents) AGENTS.md, both from the project root.
+  const filename = getInstructionsFile(agent);
 
   // For OpenCode: append a section listing the per-command and per-agent
-  // knowledge-base files we wrote under .opencode/commands/ and
-  // .opencode/agents/. OpenCode doesn't auto-load those — but it does
-  // auto-load AGENTS.md, so this is how we make them discoverable.
+  // files we wrote under .opencode/commands/ and .opencode/agents/, so
+  // the LLM knows they exist.
   let opencodeIndexBlock = '';
   if (agent === 'opencode') {
     const idx = renderOpencodeIndex();
@@ -617,6 +648,11 @@ async function writeBuiltinCommands(projectRoot, result) {
  * @property {string} [provider]                        Override global default.
  * @property {string|null} [model]                      Override global default.
  * @property {string} [agent]                           Override global default.
+ * @property {string} [launchProvider]                  Provider to launch the agent with.
+ *                                                      Default: the analysis provider if it
+ *                                                      can drive the agent, else the agent's
+ *                                                      native one.
+ * @property {string|null} [launchModel]                Model for launchProvider.
  * @property {string} [name]                            Project name (default: dir basename).
  * @property {string} [description]
  * @property {string} [stack]                           Stack id (e.g. 'nextjs-pages').
@@ -656,9 +692,31 @@ export async function runImportNonInteractive(input) {
     provider = def.provider;
     if (model === null && def.model) model = def.model;
   }
+  const analysisErr = validateProviderModel(provider, model);
+  if (analysisErr) throw new Error(analysisErr);
 
   // Resolve agent.
   const agent = input.agent ?? (await getDefaultAgent());
+
+  // Resolve the provider the project will be LAUNCHED with.
+  let launch;
+  if (input.launchProvider) {
+    const err = validateProviderModel(input.launchProvider, input.launchModel ?? null);
+    if (err) throw new Error(err);
+    if (!isProviderCompatible(input.launchProvider, agent)) {
+      throw new Error(
+        `--launch-provider ${input.launchProvider} no puede lanzar ${getAgent(agent)?.label ?? agent}.`,
+      );
+    }
+    launch = { provider: input.launchProvider, name: input.launchModel ?? null };
+  } else {
+    const r = resolveLaunchModel({ provider, name: model }, agent);
+    launch = r.model;
+    if (r.adjusted) {
+      log(`ℹ ${provider} sirve para analizar pero no para lanzar ${getAgent(agent).label}; ` +
+          `el proyecto se lanza con ${launch.provider}. Usá --launch-provider para elegir otro.`);
+    }
+  }
 
   // Run analysis (or skip with defaults).
   /** @type {import('../core/parse-analysis.js').AnalysisResult | null} */
@@ -749,8 +807,8 @@ export async function runImportNonInteractive(input) {
 
   // Detect conflicts. With --yes we overwrite; without it we preserve.
   // Note: the field is still called `overwriteClaudeMd` for backwards
-  // compat, but it covers any agent instructions file (CLAUDE.md,
-  // .opencode/AGENTS.md, AGENTS.md) since only one is written per project.
+  // compat, but it covers any agent instructions file (CLAUDE.md or
+  // AGENTS.md) since only one is written per project.
   const conflicts = await detectConflicts(projectRoot);
   const overrides = {
     overwriteClaudeMd: input.yes ? true : !(conflicts.claudeMd || conflicts.agentsMd),
@@ -765,7 +823,7 @@ export async function runImportNonInteractive(input) {
     description,
     stackId,
     databaseId,
-    model: { provider, name: model },
+    model: launch,
     agent,
     branches,
     skills,

@@ -4,6 +4,10 @@
  * Muestra el estado actual de la configuración global y permite
  * editar cada campo. La configuración vive en ~/.storm-ai/config.json.
  *
+ * Son DEFAULTS: se usan al crear/importar proyectos. Los proyectos que
+ * ya existen guardan su propio agent/provider/modelo y se editan con
+ * `storm project` (o desde "Seleccionar proyecto").
+ *
  * Navegación: en CADA pregunta el usuario tiene "← Volver" como opción
  * explícita, y Esc/Ctrl+C también vuelven al menú anterior en vez de
  * cerrar storm. La única salida del wizard es elegir "Volver" en el
@@ -15,11 +19,12 @@ import * as clack from '@clack/prompts';
 import {
   readAllConfig,
   setConfigValue,
+  setProviderAndModel,
   resetConfig,
   CONFIG_FILE_PATH,
 } from '../commands/config.js';
-import { CLOUD_MODELS, LOCAL_RECOMMENDED, detectOllama, PROVIDERS } from '../core/providers.js';
 import { AGENTS, detectAgent, installAgent } from '../core/agents.js';
+import { pickProvider, pickModel, providerLabel } from './pick-launch.js';
 import * as ansi from './ansi.js';
 import { platform } from 'node:os';
 
@@ -42,7 +47,7 @@ export async function runConfigWizard(_input) {
       options: [
         { value: 'provider',   label: 'Cambiar provider y modelo por defecto' },
         { value: 'agent',      label: 'Cambiar agent por defecto (Claude Code / OpenCode / ...)' },
-        { value: 'launchCmd',  label: 'Definir un comando de lanzamiento custom' },
+        { value: 'launchCmd',  label: 'Definir el comando para agents custom' },
         { value: 'ollamaHost', label: 'Cambiar OLLAMA_HOST' },
         { value: 'install',    label: 'Instalar/verificar agent' },
         { value: 'reset',      label: 'Resetear todo a valores por defecto' },
@@ -82,79 +87,35 @@ export async function runConfigWizard(_input) {
 
 function showStatus(cfg) {
   const lines = [
-    `Provider:        ${ansi.cyan(cfg.defaultProvider?.provider ?? '(no seteado)')}`,
-    `Modelo:          ${ansi.cyan(cfg.defaultProvider?.model ?? '(no seteado)')}`,
+    `Provider:        ${cfg.defaultProvider?.provider ? ansi.cyan(providerLabel(cfg.defaultProvider.provider)) : ansi.dim('(no seteado)')}`,
+    `Modelo:          ${cfg.defaultProvider?.model ? ansi.cyan(cfg.defaultProvider.model) : ansi.dim('(no aplica / no seteado)')}`,
     `Agent:           ${ansi.cyan(cfg.defaultAgent ?? 'claude-code')}`,
-    `Launch custom:   ${cfg.defaultLaunchCommand ? ansi.cyan(cfg.defaultLaunchCommand) : ansi.dim('(usa template del agent)')}`,
+    `Comando custom:  ${cfg.defaultLaunchCommand ? ansi.cyan(cfg.defaultLaunchCommand) : ansi.dim('(ninguno)')}`,
     `OLLAMA_HOST:     ${ansi.cyan(cfg.ollamaHost ?? 'http://127.0.0.1:11434')}`,
+    '',
+    ansi.dim('Defaults para proyectos nuevos y para analizar en `storm import`.'),
+    ansi.dim('Para un proyecto existente: `storm project` o "Seleccionar proyecto".'),
   ];
   clack.note(lines.join('\n'), 'Estado actual');
 }
 
 async function editProvider() {
-  const provider = await clack.select({
-    message: 'Provider (Esc para volver)',
-    options: [
-      ...PROVIDERS.map((p) => ({ value: p.id, label: p.label, hint: p.hint })),
-      { value: BACK, label: '← Volver' },
-    ],
+  const cur = await readAllConfig();
+  const provider = await pickProvider({
+    message: 'Provider por defecto (Esc para volver)',
+    initialValue: cur.defaultProvider?.provider ?? 'ollama-cloud',
   });
-  if (clack.isCancel(provider) || provider === BACK) return;
-  await setConfigValue('provider', provider);
+  if (!provider) return;
+  const model = await pickModel(provider, {
+    initialValue: provider === cur.defaultProvider?.provider ? cur.defaultProvider.model : null,
+  });
+  if (!model) return; // Nada se guardó: provider y modelo van juntos.
 
-  // Now pick a model that fits the provider.
-  let model = null;
-  if (provider === 'ollama-cloud') {
-    const choice = await clack.select({
-      message: 'Modelo cloud',
-      options: [
-        ...CLOUD_MODELS.map((m) => ({ value: m.name, label: m.label, hint: m.hint })),
-        { value: '__custom__', label: 'Custom...' },
-        { value: BACK,         label: '← Volver (provider quedó seteado, modelo no)' },
-      ],
-    });
-    if (clack.isCancel(choice) || choice === BACK) return;
-    if (choice === '__custom__') {
-      const c = await clack.text({
-        message: 'Nombre del modelo (debe terminar en :cloud) — Esc para volver',
-        validate: (v) => v?.trim().endsWith(':cloud') ? undefined : 'Modelos cloud terminan en :cloud',
-      });
-      if (clack.isCancel(c)) return;
-      model = c.trim();
-    } else {
-      model = choice;
-    }
-  } else if (provider === 'ollama-local') {
-    const choice = await clack.select({
-      message: 'Modelo local',
-      options: [
-        ...LOCAL_RECOMMENDED.map((m) => ({ value: m.name, label: m.label, hint: m.hint })),
-        { value: '__custom__', label: 'Custom...' },
-        { value: BACK,         label: '← Volver (provider quedó seteado, modelo no)' },
-      ],
-    });
-    if (clack.isCancel(choice) || choice === BACK) return;
-    if (choice === '__custom__') {
-      const c = await clack.text({
-        message: 'Nombre del modelo local — Esc para volver',
-      });
-      if (clack.isCancel(c)) return;
-      model = c.trim();
-    } else {
-      model = choice;
-    }
-  } else {
-    // Providers without a model picker:
-    //   - 'claude'           → API call uses Anthropic's default model (env-controlled).
-    //   - 'via-claude-code'  → delegates to `claude` CLI; model is whatever the user
-    //                          configured inside Claude Code.
-    //   - 'via-opencode'     → delegates to `opencode` CLI; model is whatever the user
-    //                          configured inside OpenCode (incl. ChatGPT Pro via web auth).
-    model = null;
-  }
-
-  await setConfigValue('model', model);
-  clack.log.success(`Provider seteado en ${ansi.cyan(provider)}${model ? ' (' + model + ')' : ''}.`);
+  await setProviderAndModel(provider, model.name);
+  clack.log.success(
+    `Provider por defecto: ${ansi.cyan(providerLabel(provider))}${model.name ? ' (' + model.name + ')' : ''}.`,
+  );
+  clack.log.info(ansi.dim('Los proyectos existentes no cambian. Para eso: `storm project`.'));
 }
 
 async function editAgent() {
@@ -178,12 +139,13 @@ async function editAgent() {
     if (clack.isCancel(c)) return;
     agentId = c.trim();
     clack.log.warn(
-      'Agent custom: tenés que setear `launchCommand` para que storm sepa cómo lanzarlo.',
+      'Agent custom: definí también "el comando para agents custom" para que storm sepa cómo lanzarlo.',
     );
   }
 
   await setConfigValue('agent', agentId);
-  clack.log.success(`Agent seteado en ${ansi.cyan(agentId)}.`);
+  clack.log.success(`Agent por defecto: ${ansi.cyan(agentId)}.`);
+  clack.log.info(ansi.dim('Los proyectos existentes no cambian. Para eso: `storm project`.'));
 }
 
 async function editLaunchCommand() {
@@ -192,16 +154,19 @@ async function editLaunchCommand() {
 
   clack.note(
     [
-      'Si seteás un comando custom, sobrescribe el template del agent.',
+      'Comando para lanzar agents que storm no conoce (Aider, scripts propios).',
+      'Se copia a los proyectos nuevos con agent custom, y se usa en los',
+      'proyectos con agent custom que no tengan un comando propio.',
+      'Claude Code y OpenCode usan su template y no lo necesitan.',
+      '',
       'Usá el placeholder ' + ansi.cyan('{{model}}') + ' donde quieras inyectar el nombre del modelo.',
       '',
       'Ejemplos:',
-      ansi.dim('  ollama launch claude --model {{model}}'),
-      ansi.dim('  ollama launch opencode --model {{model}}'),
       ansi.dim('  aider --model {{model}} --no-auto-commits'),
       ansi.dim('  python -m my_agent --provider ollama --model {{model}}'),
       '',
-      'Para volver al template del agent (no usar comando custom), dejá vacío.',
+      'Para pisar el comando de UN proyecto: `storm project set launchCommand "..."`.',
+      'Dejá vacío para borrarlo.',
       ansi.dim('Esc en cualquier momento para cancelar.'),
     ].join('\n'),
     'Comando custom',
@@ -209,7 +174,7 @@ async function editLaunchCommand() {
 
   const cmd = await clack.text({
     message: 'Comando de lanzamiento (Esc para volver)',
-    placeholder: 'ollama launch opencode --model {{model}}',
+    placeholder: 'aider --model {{model}}',
     initialValue: currentValue,
   });
   if (clack.isCancel(cmd)) return;
@@ -217,7 +182,7 @@ async function editLaunchCommand() {
   const trimmed = cmd?.trim() ?? '';
   await setConfigValue('launchCommand', trimmed.length === 0 ? null : trimmed);
   if (trimmed.length === 0) {
-    clack.log.success('Comando custom borrado. Storm va a usar el template del agent.');
+    clack.log.success('Comando custom borrado.');
   } else {
     clack.log.success(`Comando seteado: ${ansi.cyan(trimmed)}`);
   }

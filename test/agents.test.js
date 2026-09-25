@@ -35,14 +35,14 @@ test('getAgent: returns null for unknown ids', () => {
   assert.ok(getAgent('opencode'));
 });
 
-test('buildAgentLaunchCommand: claude-code + ollama-cloud uses ollama launch claude', () => {
+test('buildAgentLaunchCommand: claude-code + ollama-cloud launches claude with native settings', () => {
   const r = buildAgentLaunchCommand({
     provider: 'ollama-cloud',
     agentId: 'claude-code',
     modelName: 'kimi-k2.6:cloud',
   });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'claude', '--model', 'kimi-k2.6:cloud']);
+  assert.equal(r.command, 'claude');
+  assert.deepEqual(r.args, ['--model', 'kimi-k2.6:cloud']);
 });
 
 test('buildAgentLaunchCommand: claude-code + ollama-local same shape', () => {
@@ -51,8 +51,8 @@ test('buildAgentLaunchCommand: claude-code + ollama-local same shape', () => {
     agentId: 'claude-code',
     modelName: 'qwen3.5:9b',
   });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'claude', '--model', 'qwen3.5:9b']);
+  assert.equal(r.command, 'claude');
+  assert.deepEqual(r.args, ['--model', 'qwen3.5:9b']);
 });
 
 test('buildAgentLaunchCommand: claude-code + claude provider runs `claude` directly', () => {
@@ -65,24 +65,24 @@ test('buildAgentLaunchCommand: claude-code + claude provider runs `claude` direc
   assert.deepEqual(r.args, []);
 });
 
-test('buildAgentLaunchCommand: opencode + ollama-cloud uses ollama launch opencode', () => {
+test('buildAgentLaunchCommand: opencode + ollama-cloud launches opencode with native settings', () => {
   const r = buildAgentLaunchCommand({
     provider: 'ollama-cloud',
     agentId: 'opencode',
     modelName: 'glm-4.7:cloud',
   });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'opencode', '--model', 'glm-4.7:cloud']);
+  assert.equal(r.command, 'opencode');
+  assert.deepEqual(r.args, ['--model', 'ollama/glm-4.7:cloud']);
 });
 
-test('buildAgentLaunchCommand: opencode + ollama-local also uses ollama launch opencode', () => {
+test('buildAgentLaunchCommand: opencode + ollama-local also launches opencode with native settings', () => {
   const r = buildAgentLaunchCommand({
     provider: 'ollama-local',
     agentId: 'opencode',
     modelName: 'qwen3-coder',
   });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'opencode', '--model', 'qwen3-coder']);
+  assert.equal(r.command, 'opencode');
+  assert.deepEqual(r.args, ['--model', 'ollama/qwen3-coder']);
 });
 
 test('buildAgentLaunchCommand: opencode + claude provider runs `opencode` directly', () => {
@@ -93,6 +93,14 @@ test('buildAgentLaunchCommand: opencode + claude provider runs `opencode` direct
   });
   assert.equal(r.command, 'opencode');
   assert.deepEqual(r.args, []);
+});
+
+test('buildAgentLaunchCommand: via-* providers launch the independently selected agent', () => {
+  for (const provider of ['via-claude-code', 'via-opencode']) {
+    for (const [agentId, command] of [['claude-code', 'claude'], ['opencode', 'opencode']]) {
+      assert.deepEqual(buildAgentLaunchCommand({ provider, agentId, modelName: null }), { command, args: [] });
+    }
+  }
 });
 
 test('buildAgentLaunchCommand: throws when ollama provider has no model', () => {
@@ -160,4 +168,77 @@ test('buildAgentLaunchCommand: empty customCommand throws', () => {
     }),
     /vacío/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Provider ↔ agent compatibility
+// ---------------------------------------------------------------------------
+
+import {
+  getCompatibleProviders,
+  isProviderCompatible,
+  resolveLaunchModel,
+  getInstructionsFile,
+} from '../src/core/agents.js';
+import { PROVIDERS } from '../src/core/providers.js';
+
+test('buildAgentLaunchCommand: via-* provider launches its own CLI', () => {
+  assert.deepEqual(
+    buildAgentLaunchCommand({ provider: 'via-claude-code', agentId: 'claude-code', modelName: null }),
+    { command: 'claude', args: [] },
+  );
+  assert.deepEqual(
+    buildAgentLaunchCommand({ provider: 'via-opencode', agentId: 'opencode', modelName: null }),
+    { command: 'opencode', args: [] },
+  );
+});
+
+test('buildAgentLaunchCommand: via-* of the other CLI still launches the selected agent', () => {
+  // via-* only picks the CLI used for import analysis; launch uses the agent.
+  assert.equal(
+    buildAgentLaunchCommand({ provider: 'via-opencode', agentId: 'claude-code', modelName: null }).command,
+    'claude',
+  );
+  assert.equal(
+    buildAgentLaunchCommand({ provider: 'via-claude-code', agentId: 'opencode', modelName: null }).command,
+    'opencode',
+  );
+});
+
+test('buildAgentLaunchCommand: unknown provider throws a clear error', () => {
+  assert.throws(
+    () => buildAgentLaunchCommand({ provider: 'nope', agentId: 'claude-code', modelName: null }),
+    /no se puede lanzar con el provider "nope"/,
+  );
+});
+
+test('every known agent: its providers exist and its nativeProvider is compatible', () => {
+  const ids = new Set(PROVIDERS.map((p) => p.id));
+  for (const a of AGENTS) {
+    for (const p of getCompatibleProviders(a.id)) assert.ok(ids.has(p), `${a.id}: unknown provider ${p}`);
+    assert.ok(isProviderCompatible(a.nativeProvider, a.id), `${a.id}: nativeProvider not compatible`);
+  }
+});
+
+test('custom agents accept any provider', () => {
+  assert.equal(getCompatibleProviders('aider'), null);
+  assert.equal(isProviderCompatible('via-opencode', 'aider'), true);
+});
+
+test('resolveLaunchModel: keeps compatible models, falls back to the native provider', () => {
+  assert.deepEqual(
+    resolveLaunchModel({ provider: 'ollama-cloud', name: 'kimi-k2.6:cloud' }, 'opencode'),
+    { model: { provider: 'ollama-cloud', name: 'kimi-k2.6:cloud' }, adjusted: false },
+  );
+  // Every built-in provider drives both agents today; an unknown one falls back.
+  assert.deepEqual(
+    resolveLaunchModel({ provider: 'some-future-thing', name: 'x' }, 'claude-code'),
+    { model: { provider: 'via-claude-code', name: null }, adjusted: true },
+  );
+});
+
+test('getInstructionsFile: CLAUDE.md for Claude Code, root AGENTS.md otherwise', () => {
+  assert.equal(getInstructionsFile('claude-code'), 'CLAUDE.md');
+  assert.equal(getInstructionsFile('opencode'), 'AGENTS.md');
+  assert.equal(getInstructionsFile('aider'), 'AGENTS.md');
 });

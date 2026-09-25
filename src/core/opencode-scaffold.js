@@ -3,19 +3,13 @@
  *
  * When `agent=opencode` is selected, storm writes:
  *
- *   .opencode/AGENTS.md       — main entry point, what OpenCode reads first.
- *   .opencode/commands/<n>.md — per-command knowledge base.
- *   .opencode/agents/<n>.md   — per-role knowledge base.
+ *   AGENTS.md (project root)  — instructions OpenCode auto-loads.
+ *   .opencode/commands/<n>.md — OpenCode loads these as `/<n>` commands.
+ *   .opencode/agents/<n>.md   — OpenCode loads these as subagents.
  *
- * Important: these files are NOT executed by OpenCode the way
- * `.claude/commands/` are by Claude Code. OpenCode doesn't currently
- * implement project-local slash commands. So we treat these as a
- * **knowledge base** the LLM (operating through OpenCode) can read
- * when the user asks it to do task management with storm.
- *
- * To make this discoverable, AGENTS.md (the file OpenCode does read
- * automatically) ends with a section listing the commands and agents
- * defined here, with one-line summaries pointing to the detail file.
+ * Both kinds carry a `description` frontmatter (what OpenCode shows in
+ * its pickers). The body doubles as a reference document the LLM can
+ * read, and AGENTS.md ends with an index of all of them.
  */
 
 // ---------------------------------------------------------------------------
@@ -562,13 +556,12 @@ storm task add "Profile page: wire avatar to backend" \\
  * @returns {string}
  */
 export function renderOpencodeCommand(spec) {
-  return `<!--
-This file is part of storm-ai's scaffolding. It is a knowledge base
-entry the LLM (operating through OpenCode) can read when the user
-asks for something matching this command's purpose.
-
-OpenCode does NOT execute this file as a slash command. It is a
-reference document.
+  return `---
+description: ${yamlString(spec.summary || spec.title)}
+---
+<!--
+storm-ai built-in command. OpenCode loads it as /${spec.id}; it is also a
+reference document for how to drive the storm CLI.
 -->
 
 ${spec.body}
@@ -581,14 +574,22 @@ ${spec.body}
  * @returns {string}
  */
 export function renderOpencodeAgent(spec) {
-  return `<!--
-This file describes a "role" the LLM (operating through OpenCode) can
-adopt when the user asks. It is a knowledge base entry, not an
-auto-loaded sub-agent.
+  return `---
+description: ${yamlString(spec.summary || spec.title)}
+mode: subagent
+---
+<!--
+storm-ai built-in role. OpenCode loads it as a subagent; it is also a
+reference document describing the expected workflow.
 -->
 
 ${spec.body}
 `;
+}
+
+/** Double-quoted YAML scalar (JSON strings are valid YAML). */
+function yamlString(s) {
+  return JSON.stringify(String(s ?? ''));
 }
 
 /**

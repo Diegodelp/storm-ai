@@ -85,7 +85,9 @@ Storm separates two concerns that are often conflated:
   your project, and by `storm launch` to route the coding agent.
 - **Agent** — *which CLI you actually run* in your terminal day-to-day.
 
-You can mix and match. Storm currently supports five providers:
+You can mix and match: every provider can launch both Claude Code and
+OpenCode (storm writes the CLI's native project config, see below).
+Storm currently supports five providers:
 
 | Provider | What it is | When to use it |
 |---|---|---|
@@ -100,19 +102,56 @@ keys in storm at all. If you've already authenticated OpenCode against
 ChatGPT (via web auth), you can use that quota for storm's project
 analysis just by selecting `--provider via-opencode`.
 
+For `via-*`, `storm launch` opens the selected **agent** with that agent's
+own configuration. The CLI used for import analysis can differ from the
+interactive agent. OpenCode analysis uses `opencode run --format json`
+([CLI reference](https://opencode.ai/docs/cli/#run)); prompts are sent on stdin.
+
+Ollama uses `OLLAMA_HOST` from the environment first, then the saved
+`storm config set ollamaHost <url>` value, then `http://127.0.0.1:11434`.
+The same host is used for analysis, model listing, downloads, and launch.
+When scaffolding or launching an Ollama project without `model.name`, Storm
+chooses an installed model for that provider, preferring its recommended
+models when available. Local mode never falls back to a cloud model or
+downloads one automatically. Discovery also works against a remote daemon
+without an Ollama CLI installed on this machine. Changing providers with
+`storm config set provider` clears the old model.
+
+Projects keep their own provider/model/agent: change them with
+`storm project` (see "Editing a project's agent / provider / model").
+
+`storm new`, `storm import`, templates, and `storm launch` generate and
+synchronize the selected CLI's native project configuration:
+
+| CLI | File | Generated settings |
+|---|---|---|
+| Claude Code | `.claude/settings.local.json` | Selected model; Ollama endpoint, placeholder authentication, and model aliases when using Ollama. |
+| OpenCode | `opencode.json` (or existing JSON/JSONC config) | Selected `provider/model`, Ollama connection, available models, and the scaffold's instructions file. |
+
+Storm launches `claude` or `opencode` directly with these files. The formats
+follow Ollama's [Claude Code](https://docs.ollama.com/integrations/claude-code)
+and [OpenCode](https://docs.ollama.com/integrations/opencode) integrations.
+Existing unrelated settings and JSONC comments are preserved. Generated
+fields are tracked in `.storm/agent-config.json` so provider changes can
+remove stale routing; manually changed values are retained. Global API keys
+and login sessions are not copied. Custom launch commands bypass this setup.
+
 And two coding agents:
 
 - **Claude Code** — `claude` CLI from Anthropic. Storm scaffolds `CLAUDE.md`
   and `.claude/commands/` with built-in slash commands (`/task-add`,
   `/task-done`, `/refresh-compact`, etc.).
-- **OpenCode** — `opencode` CLI. Storm scaffolds `.opencode/AGENTS.md`
-  with the same project conventions but written for OpenCode's format.
-  No `.claude/` directory is created.
+- **OpenCode** — `opencode` CLI. Storm scaffolds `AGENTS.md` at the
+  project root (where OpenCode looks for it) plus `.opencode/commands/`
+  and `.opencode/agents/`. No `.claude/` directory is created.
 
-For other agents (Aider, Cursor CLI, custom scripts), set a `customCommand`
-in your config with `{{model}}` as the placeholder:
+For other agents (Aider, Cursor CLI, custom scripts), give the project a
+launch command with `{{model}}` as the placeholder:
 
 ```bash
+storm project set agent aider
+storm project set launchCommand 'aider --model {{model}} --no-auto-commits'
+# or, as the default for every new project with a custom agent:
 storm config set launchCommand 'aider --model {{model}} --no-auto-commits'
 ```
 
@@ -123,7 +162,7 @@ After importing or creating a project, storm produces:
 ```
 your-project/
 ├── project.config.json                  # storm's source of truth
-├── CLAUDE.md  OR  .opencode/AGENTS.md   # depends on chosen agent
+├── CLAUDE.md  OR  AGENTS.md              # depends on chosen agent
 ├── TASKS.md                              # generated, don't edit manually
 ├── .context-compact/
 │   ├── project-map.md                    # always loaded (~500 LOC)
@@ -147,10 +186,18 @@ Storm has two config layers:
 
 **Per-project** — `<project>/project.config.json`. Source of truth for
 that project: stack, branches, tasks, model, agent, custom launch command.
-Edit by hand or via storm commands.
+`storm launch` / `storm open` read **only** this. Change it with
+`storm project` (or "Seleccionar proyecto" → "Cambiar agent / provider /
+modelo" in the menu).
 
-**Global** — `~/.storm-ai/config.json`. Machine-wide defaults for the
-wizards.
+**Global** — `~/.storm-ai/config.json`. Defaults used when a project is
+**created or imported**, plus the provider `storm import` analyzes with.
+Changing it does not touch existing projects.
+
+Two global keys also apply at launch time: `ollamaHost` (exported as
+`OLLAMA_HOST` for Ollama projects unless the env var is set) and
+`launchCommand` (used for projects with a custom agent that don't have a
+command of their own).
 
 ```json
 {
@@ -173,15 +220,36 @@ storm config
 # Scripted
 storm config get                                 # print all
 storm config get provider                        # print one key
-storm config set provider via-opencode
+storm config set provider ollama-cloud           # clears model if the provider changed
+storm config set model kimi-k2.6:cloud           # only for ollama-* providers
 storm config set agent opencode
-storm config set launchCommand 'ollama launch opencode --model {{model}}'
+storm config set launchCommand 'aider --model {{model}}'
 storm config set ollamaHost http://my-server:11434
 storm config unset launchCommand                 # clear a key
 storm config path                                # print the file path
 ```
 
 Valid keys: `provider`, `model`, `agent`, `launchCommand`, `ollamaHost`.
+Values are validated (unknown providers, a model for a provider that
+doesn't take one, or a local model for `ollama-cloud` are rejected).
+
+### Editing a project's agent / provider / model
+
+```bash
+# Inside the project
+storm project                                    # interactive wizard
+storm project get                                # agent, provider, model, launchCommand
+storm project set agent opencode                 # writes AGENTS.md + .opencode/ if missing
+storm project set provider ollama-cloud --model kimi-k2.6:cloud
+storm project set model glm-5:cloud
+storm project set provider via-opencode          # model is cleared
+storm project unset launchCommand
+```
+
+Every change re-syncs the CLI's native project config. Switching the
+agent writes the new agent's scaffolding; files you already have (e.g.
+an edited `AGENTS.md`) are never overwritten, and the old agent's files
+are left in place for you to delete.
 
 The wizard also offers to verify and install Claude Code or OpenCode if
 they're not already on your PATH.
@@ -216,9 +284,10 @@ storm skill remove code-reviewer
 
 # Agent launch
 storm open                          # list storm projects, pick one
-storm open my-app                   # launch the configured agent there
+storm open my-app                   # launch the project's agent there
 storm open my-app --print           # only print the path (for shell snippets)
 storm launch                        # launch in the current dir
+storm project                       # change this project's agent/provider/model
 ```
 
 ### Debugging parse failures
@@ -246,8 +315,8 @@ Storm can scaffold projects from templates hosted in the registry:
 
 ```bash
 storm templates list                    # all available templates
-storm templates show <name>             # template metadata
-storm new --from-template nextjs-saas   # use template
+storm templates info <id>               # template metadata
+storm new --template nextjs-saas        # use template
 ```
 
 The registry lives at:
@@ -266,6 +335,8 @@ modifying your source code.
 storm import "C:\Users\me\Desktop\my-project"
 
 # Non-interactive — pick provider, agent, stack, branches explicitly
+# (--provider analyzes; --launch-provider/--launch-model choose what the
+# project opens with, default: --provider if it can launch the agent)
 storm import "C:\Users\me\Desktop\my-project" \
   --yes \
   --provider via-opencode \
@@ -431,11 +502,15 @@ Set `STORM_DEBUG=1` to see the full list with each error message. Most
 common cause: parser plugin issue — file the issue and we'll add the
 plugin.
 
-**`storm launch` fails with "requires a model name".**
-Your `project.config.json` has the model in the wrong shape. Storm
-auto-migrates legacy `{provider, model}` to `{provider, name}` on read,
-so just running any storm command should fix it. If it persists, edit
-the file by hand.
+**`storm launch` fails with "requires a model name" or "no se detectaron modelos".**
+The project uses Ollama and no model could be chosen. Set one with
+`storm project set model <name>` (or `ollama pull <model>`). Legacy
+`{provider, model}` configs are auto-migrated to `{provider, name}` on read.
+
+**I changed the provider in `storm config` but my project didn't change.**
+That's by design: the global config is only a default for new projects.
+Use `storm project` inside the project (or the "Seleccionar proyecto"
+menu).
 
 **Provider says "X no está instalado o no está en el PATH".**
 You picked `via-claude-code` or `via-opencode` but the corresponding CLI

@@ -3,11 +3,13 @@
  *
  * Flow:
  *   1. Ask depth (shallow / deep).
- *   2. Resolve provider (use global default; if missing, ask once and save).
+ *   2. Resolve the ANALYSIS provider (global default, or pick another one
+ *      for this run; if there's no default, ask once and save it).
  *   3. Spinner while we scan + call the LLM + parse.
  *   4. Editable preview of the analysis.
- *   5. Conflict prompts for any pre-existing storm files.
- *   6. Apply.
+ *   5. Agent → provider → model the project will be LAUNCHED with.
+ *   6. Conflict prompts for any pre-existing storm files.
+ *   7. Apply.
  */
 
 import * as clack from '@clack/prompts';
@@ -21,13 +23,11 @@ import {
 import {
   getDefaultProvider,
   setDefaultProvider,
+  getDefaultAgent,
+  getDefaultLaunchCommand,
 } from '../core/global-config.js';
-import {
-  detectOllama,
-  CLOUD_MODELS,
-  LOCAL_RECOMMENDED,
-  PROVIDERS,
-} from '../core/providers.js';
+import { agentLabel, getInstructionsFile } from '../core/agents.js';
+import { pickLaunchSettings, pickProvider, pickModel, providerLabel } from './pick-launch.js';
 import { STACKS, DATABASES, getStack, getDatabase } from '../core/stacks.js';
 import * as ansi from './ansi.js';
 
@@ -59,9 +59,11 @@ export async function runImportWizard(input) {
   });
   if (clack.isCancel(mode) || mode === '__back__') return cancel();
 
-  // 2. Provider
+  // 2. Provider para el ANÁLISIS (no es necesariamente con el que se
+  // va a abrir el proyecto; eso se elige en el paso 5).
   let provider = await getDefaultProvider();
   if (!provider) {
+    clack.log.info('Primer uso: elegí con qué IA analizar proyectos.');
     provider = await askProvider();
     if (!provider) return cancel();
     await setDefaultProvider(provider);
@@ -70,12 +72,19 @@ export async function runImportWizard(input) {
         ansi.dim('~/.storm-ai/config.json'),
     );
   } else {
-    clack.log.info(
-      `Usando provider ${ansi.cyan(provider.provider)}` +
-        (provider.model ? ` (${provider.model})` : '') +
-        '. ' +
-        ansi.dim('Para cambiarlo: --provider <flag>'),
-    );
+    const current = providerLabel(provider.provider) + (provider.model ? ` (${provider.model})` : '');
+    const which = await clack.select({
+      message: 'Provider para analizar el proyecto',
+      options: [
+        { value: 'default', label: `Usar ${current}`, hint: 'default de storm config' },
+        { value: 'other', label: 'Elegir otro para este análisis' },
+      ],
+    });
+    if (clack.isCancel(which)) return cancel();
+    if (which === 'other') {
+      provider = await askProvider(provider);
+      if (!provider) return cancel();
+    }
   }
 
   // 3. Análisis
@@ -203,8 +212,21 @@ export async function runImportWizard(input) {
     agents = analysis.agents.filter((a) => set.has(a.slash));
   }
 
-  // 5. Conflictos: para cada archivo storm pre-existente, preguntar si pisar.
+  // 5. Con qué se va a ABRIR el proyecto. Arranca desde el provider de
+  // análisis (si puede lanzar el agent elegido).
+  clack.log.info('Ahora elegí con qué vas a trabajar en este proyecto.');
+  const launchPick = await pickLaunchSettings({
+    agent: await getDefaultAgent(),
+    launchCommand: await getDefaultLaunchCommand(),
+    provider: provider.provider,
+    model: provider.model,
+  });
+  if (!launchPick) return cancel();
+
+  // 6. Conflictos: para cada archivo storm pre-existente, preguntar si pisar.
   const conflicts = await detectConflicts(projectRoot);
+  const instructionsFile = getInstructionsFile(launchPick.agent);
+  const instructionsExists = instructionsFile === 'CLAUDE.md' ? conflicts.claudeMd : conflicts.agentsMd;
   const overrides = { overwriteClaudeMd: true, overwriteConfig: true, overwriteTasks: true };
 
   if (conflicts.config) {
@@ -215,9 +237,9 @@ export async function runImportWizard(input) {
     if (clack.isCancel(ok)) return cancel();
     overrides.overwriteConfig = ok;
   }
-  if (conflicts.claudeMd) {
+  if (instructionsExists) {
     const ok = await clack.confirm({
-      message: `Ya existe ${ansi.cyan('CLAUDE.md')}. ¿Pisar?`,
+      message: `Ya existe ${ansi.cyan(instructionsFile)}. ¿Pisar?`,
       initialValue: false,
     });
     if (clack.isCancel(ok)) return cancel();
@@ -232,7 +254,7 @@ export async function runImportWizard(input) {
     overrides.overwriteTasks = ok;
   }
 
-  // 6. Aplicar
+  // 7. Aplicar
   const confirmAll = await clack.confirm({
     message: '¿Aplicar el scaffolding ahora?',
     initialValue: true,
@@ -249,7 +271,9 @@ export async function runImportWizard(input) {
       description: description || '',
       stackId,
       databaseId,
-      model: provider, // store the same provider for this project
+      model: launchPick.model,
+      agent: launchPick.agent,
+      launch: launchPick.launchCommand ? { customCommand: launchPick.launchCommand } : {},
       branches,
       skills,
       agents,
@@ -272,54 +296,35 @@ export async function runImportWizard(input) {
   for (const w of result.warnings) {
     summary.push(`${ansi.yellow('⚠')} ${w}`);
   }
-  summary.push('', `Proyecto: ${ansi.dim(result.projectRoot)}`);
+  summary.push(
+    '',
+    `Se abre con:  ${agentLabel(launchPick.agent)} · ${providerLabel(launchPick.model.provider)}` +
+      (launchPick.model.name ? ` (${launchPick.model.name})` : ''),
+    `Proyecto: ${ansi.dim(result.projectRoot)}`,
+  );
   clack.note(summary.join('\n'), 'Import completo');
 }
 
 // ---------------------------------------------------------------------------
 
-async function askProvider() {
-  const providerChoice = await clack.select({
-    message: 'Primer uso. ¿Qué proveedor de IA querés usar?',
-    options: PROVIDERS.map((p) => ({
-      value: p.id,
-      label: p.label,
-      hint: p.hint,
-    })),
-    initialValue: 'ollama-cloud',
+/**
+ * Pick the provider (and model) to ANALYZE with. Any provider works here,
+ * including the via-* ones.
+ * @param {{provider: string, model: string|null}} [current]
+ * @returns {Promise<{provider: string, model: string|null}|null>}
+ */
+async function askProvider(current) {
+  const p = await pickProvider({
+    message: '¿Con qué proveedor de IA analizar?',
+    initialValue: current?.provider ?? 'ollama-cloud',
   });
-  if (clack.isCancel(providerChoice)) return null;
-
-  // Providers without a model picker — they pick the model themselves
-  // (Anthropic env default for 'claude'; the underlying CLI's config for
-  // 'via-claude-code' and 'via-opencode').
-  if (providerChoice === 'claude' ||
-      providerChoice === 'via-claude-code' ||
-      providerChoice === 'via-opencode') {
-    return { provider: providerChoice, model: null };
-  }
-
-  if (providerChoice === 'ollama-cloud') {
-    const m = await clack.select({
-      message: 'Modelo cloud',
-      options: CLOUD_MODELS.map((x) => ({ value: x.name, label: x.label, hint: x.hint })),
-      initialValue: 'kimi-k2.6:cloud',
-    });
-    if (clack.isCancel(m)) return null;
-    return { provider: 'ollama-cloud', model: m };
-  }
-  // ollama-local
-  const status = await detectOllama();
-  if (!status.installed) {
-    clack.log.warn('Ollama no está instalado en tu máquina. Instalalo y volvé a probar.');
-    return null;
-  }
-  const m = await clack.select({
-    message: 'Modelo local',
-    options: LOCAL_RECOMMENDED.map((x) => ({ value: x.name, label: x.label, hint: x.hint })),
+  if (!p) return null;
+  const m = await pickModel(p, {
+    initialValue: p === current?.provider ? current.model : null,
+    offerPull: true,
   });
-  if (clack.isCancel(m)) return null;
-  return { provider: 'ollama-local', model: m };
+  if (!m) return null;
+  return { provider: p, model: m.name };
 }
 
 function cancel() {

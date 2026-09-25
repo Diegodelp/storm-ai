@@ -2,19 +2,20 @@
  * Minimal LLM client used by `storm import`.
  *
  * Five backends:
- *   - 'ollama-cloud' / 'ollama-local': POSTs to OLLAMA_HOST/api/generate
+ *   - 'ollama-cloud' / 'ollama-local': POSTs to <ollama host>/api/generate
+ *     (OLLAMA_HOST env var, else `ollamaHost` from the global config)
  *     with the chosen model name. Cloud models include the ":cloud" suffix
  *     and Ollama itself routes the request to ollama.com — we never hit
  *     ollama.com directly.
  *   - 'claude': POSTs to https://api.anthropic.com/v1/messages using the
  *     ANTHROPIC_API_KEY env var.
  *   - 'via-claude-code': delegates to the `claude` CLI in the user's PATH.
- *     Runs `claude --print "<prompt>"` and reads stdout. Whatever model is
- *     configured in Claude Code (Anthropic API, the user's Pro sub, etc.)
+ *     Runs `claude --print --output-format text` with the prompt on stdin.
+ *     Whatever model is configured in Claude Code (API, Pro sub, etc.)
  *     is what we end up using.
  *   - 'via-opencode': delegates to the `opencode` CLI in the user's PATH.
- *     Runs `opencode run --print "<prompt>"`. Whatever model is configured
- *     in OpenCode (ChatGPT via web auth, Gemini, Anthropic, etc.) is used.
+ *     Runs `opencode run --format json` and extracts text events. Uses the
+ *     model configured in OpenCode (ChatGPT, Gemini, Anthropic, etc.).
  *
  * The 'via-*' providers exist so users who already pay for Claude Code or
  * OpenCode (including ChatGPT Pro routed through OpenCode) can analyze
@@ -25,8 +26,9 @@
 
 import process from 'node:process';
 import { spawn } from 'node:child_process';
+import { getOllamaHost } from './global-config.js';
+import { chooseInstalledModel, isCloudModel, listOllamaModels } from './providers.js';
 
-const OLLAMA_HOST = process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434';
 const ANTHROPIC_HOST = 'https://api.anthropic.com';
 
 /** Default model used if none is provided. Reasonable for most tasks. */
@@ -52,6 +54,7 @@ const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5';
  * @returns {Promise<string>}
  */
 export async function complete(input) {
+  input.signal?.throwIfAborted();
   if (input.provider === 'ollama-cloud' || input.provider === 'ollama-local') {
     return ollamaComplete(input);
   }
@@ -61,14 +64,15 @@ export async function complete(input) {
   if (input.provider === 'via-claude-code') {
     return viaCliComplete(input, {
       cmd: 'claude',
-      args: ['--print'],
+      args: ['--print', '--output-format', 'text'],
       installHint: 'Corré `storm config` → Instalar agent → Claude Code, o ejecutá `irm https://claude.ai/install.ps1 | iex` (Windows).',
     });
   }
   if (input.provider === 'via-opencode') {
     return viaCliComplete(input, {
       cmd: 'opencode',
-      args: ['run', '--print'],
+      args: ['run', '--format', 'json'],
+      parseOutput: parseOpenCodeOutput,
       installHint: 'Corré `storm config` → Instalar agent → OpenCode.',
     });
   }
@@ -80,8 +84,16 @@ export async function complete(input) {
 // ---------------------------------------------------------------------------
 
 async function ollamaComplete(input) {
-  const model = input.model || DEFAULT_OLLAMA_MODEL;
-  const url = `${OLLAMA_HOST}/api/generate`;
+  let model = input.model?.trim();
+  if (input.provider === 'ollama-local') {
+    model ||= chooseInstalledModel(await listOllamaModels(), input.provider);
+    input.signal?.throwIfAborted();
+    if (!model) throw new Error('ollama-local requiere un modelo local instalado. Indicá --model o descargá uno con `ollama pull <modelo>`.');
+    if (isCloudModel(model)) throw new Error('El modelo elegido es cloud; usá ollama-cloud o elegí un modelo local.');
+  }
+  model ||= DEFAULT_OLLAMA_MODEL;
+  const host = await getOllamaHost();
+  const url = `${host}/api/generate`;
 
   const body = {
     model,
@@ -102,8 +114,9 @@ async function ollamaComplete(input) {
       signal: input.signal,
     });
   } catch (err) {
+    input.signal?.throwIfAborted();
     throw new Error(
-      `No se pudo contactar a Ollama en ${OLLAMA_HOST}. ` +
+      `No se pudo contactar a Ollama en ${host}. ` +
         `¿Está corriendo el daemon? (\`ollama serve\`). Error: ${err.message}`,
     );
   }
@@ -114,7 +127,7 @@ async function ollamaComplete(input) {
   }
 
   const data = await res.json();
-  if (typeof data.response !== 'string') {
+  if (typeof data?.response !== 'string' || !data.response.trim()) {
     throw new Error(`Respuesta inesperada de Ollama: ${JSON.stringify(data).slice(0, 300)}`);
   }
   return data.response;
@@ -157,6 +170,7 @@ async function claudeComplete(input) {
       signal: input.signal,
     });
   } catch (err) {
+    input.signal?.throwIfAborted();
     throw new Error(`No se pudo contactar a Anthropic: ${err.message}`);
   }
 
@@ -167,7 +181,7 @@ async function claudeComplete(input) {
 
   const data = await res.json();
   // Response shape: { content: [{ type: 'text', text: '...' }, ...] }
-  const text = (data?.content ?? [])
+  const text = (Array.isArray(data?.content) ? data.content : [])
     .filter((b) => b?.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text)
     .join('');
@@ -199,17 +213,48 @@ async function safeText(res) {
 //   on argv hits OS-level limits (Windows ~32K, Linux ~128K) and gets
 //   clobbered by shell quoting. stdin is unlimited, no quoting hell.
 //
-// Why we don't merge system + prompt:
-//   Both Claude Code and OpenCode read system instructions from their own
-//   config files (~/.claude/, ~/.config/opencode/). The user has already
-//   chosen a "system prompt" globally. We just hand them the user prompt
-//   and trust the rest. If we need a stronger system message, we can
-//   inline it in the user prompt.
+// Task-specific instructions are inlined before the user prompt; each CLI
+// also keeps its own configured system instructions.
 // ---------------------------------------------------------------------------
+
+function parseOpenCodeOutput(stdout) {
+  const parts = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      throw new Error('OpenCode devolvió un evento JSON inválido. Verificá `opencode run --help`.');
+    }
+    if (event?.type === 'error') {
+      const message = event.error?.data?.message ?? event.error?.message ?? event.error?.name ?? event.error;
+      throw new Error(`OpenCode: ${String(message ?? 'error desconocido').slice(0, 1000)}`);
+    }
+    if (event?.type === 'text' && typeof event.part?.text === 'string') {
+      parts.push(event.part.text);
+    }
+  }
+  return parts.join('\n');
+}
+
+function stopCli(proc) {
+  if (process.platform === 'win32' && proc.pid) {
+    // Killing cmd.exe alone leaves the actual CLI running with its pipes open.
+    const killer = spawn('taskkill', ['/pid', String(proc.pid), '/t', '/f'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    killer.on('error', () => { proc.kill(); });
+    killer.on('close', (code) => { if (code !== 0) proc.kill(); });
+  } else {
+    proc.kill('SIGTERM');
+  }
+}
 
 /**
  * @param {CompleteInput} input
- * @param {{cmd: string, args: string[], installHint: string}} cliConfig
+ * @param {{cmd: string, args: string[], installHint: string, parseOutput?: (stdout: string) => string}} cliConfig
  */
 async function viaCliComplete(input, cliConfig) {
   const fullPrompt = input.system
@@ -249,15 +294,26 @@ async function viaCliComplete(input, cliConfig) {
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let stdinError;
+    const onAbort = () => {
+      try { stopCli(proc); } catch { /* Process may already have exited. */ }
+      settle(reject, input.signal.reason);
+    };
 
     const settle = (fn, value) => {
       if (settled) return;
       settled = true;
+      input.signal?.removeEventListener('abort', onAbort);
       fn(value);
     };
 
-    proc.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
-    proc.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+    proc.stdout.setEncoding('utf8');
+    proc.stderr.setEncoding('utf8');
+    proc.stdout.on('data', (chunk) => { stdout += chunk; });
+    proc.stderr.on('data', (chunk) => { stderr += chunk; });
+    // A CLI can exit before consuming a large prompt. Wait for close so the
+    // caller receives its exit code/stderr instead of an unhandled EPIPE.
+    proc.stdin.on('error', (err) => { stdinError = err; });
 
     proc.on('error', (err) => {
       // ENOENT means the binary isn't in PATH.
@@ -273,16 +329,30 @@ async function viaCliComplete(input, cliConfig) {
       }
     });
 
-    proc.on('exit', (code) => {
+    proc.on('close', (code) => {
+      if (settled) return;
+      let output = stdout;
+      if (cliConfig.parseOutput && stdout.trim()) {
+        try {
+          output = cliConfig.parseOutput(stdout);
+        } catch (err) {
+          settle(reject, err);
+          return;
+        }
+      }
       if (code === 0) {
-        if (!stdout.trim()) {
+        if (stdinError) {
+          settle(reject, new Error(`No se pudo enviar el prompt a \`${cliConfig.cmd}\`: ${stdinError.message}`));
+          return;
+        }
+        if (!output.trim()) {
           settle(reject, new Error(
             `\`${cliConfig.cmd}\` devolvió stdout vacío. ` +
               `stderr: ${stderr.slice(0, 500) || '<vacío>'}`,
           ));
           return;
         }
-        settle(resolve, stdout);
+        settle(resolve, output);
       } else {
         // When `shell: true` on Windows, a missing binary doesn't surface
         // as ENOENT — it surfaces as exit code 1 with a localized stderr
@@ -295,8 +365,8 @@ async function viaCliComplete(input, cliConfig) {
         const looksLikeMissing =
           lower.includes('no se reconoce') ||
           lower.includes('is not recognized') ||
-          lower.includes('command not found') ||
-          lower.includes('not found');
+          lower.includes(`${cliConfig.cmd}: command not found`) ||
+          lower.includes(`${cliConfig.cmd}: not found`);
         if (looksLikeMissing) {
           settle(reject, new Error(
             `\`${cliConfig.cmd}\` no está instalado o no está en el PATH.\n` +
@@ -313,14 +383,14 @@ async function viaCliComplete(input, cliConfig) {
 
     // Allow callers to cancel.
     if (input.signal) {
-      input.signal.addEventListener('abort', () => {
-        try { proc.kill('SIGTERM'); } catch { /* noop */ }
-        settle(reject, new Error('Cancelado por el usuario.'));
-      }, { once: true });
+      input.signal.addEventListener('abort', onAbort, { once: true });
+      if (input.signal.aborted) {
+        onAbort();
+        return;
+      }
     }
 
     // Pipe the prompt to stdin.
-    proc.stdin.write(fullPrompt, 'utf8');
-    proc.stdin.end();
+    proc.stdin.end(fullPrompt, 'utf8');
   });
 }

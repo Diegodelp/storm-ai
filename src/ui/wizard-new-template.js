@@ -7,10 +7,12 @@
  *   3. Spinner: clonar repo y leer storm-template.json.
  *   4. Preguntar el nombre del proyecto.
  *   5. Preguntar variables del template (las definidas en storm-template.json).
- *   6. Preguntar provider/model (igual que el wizard normal).
+ *   6. Preguntar agent → provider → modelo (igual que el wizard normal).
  *   7. Confirmar.
- *   8. applyTemplateToProject().
- *   9. Mostrar resumen y abrir Claude Code.
+ *   8. applyTemplateToProject() y guardar agent/provider/modelo en el
+ *      proyecto (generando el scaffolding del agent si el template traía
+ *      el de otro).
+ *   9. Mostrar resumen y abrir el agent.
  *
  * Si el registry está vacío o falla la fetch, devuelve null para que el
  * wizard principal caiga al flujo "desde cero".
@@ -21,24 +23,21 @@ import path from 'node:path';
 
 import { listTemplates } from '../commands/templates.js';
 import { fetchTemplate, applyTemplateToProject } from '../commands/new-from-template.js';
-import {
-  detectOllama,
-  listOllamaModels,
-  pullOllamaModel,
-  CLOUD_MODELS,
-  LOCAL_RECOMMENDED,
-  PROVIDERS,
-  getProvider,
-} from '../core/providers.js';
+import { updateProjectSettings } from '../commands/project.js';
+import { getDefaultAgent, getDefaultProvider, getDefaultLaunchCommand } from '../core/global-config.js';
+import { agentLabel } from '../core/agents.js';
+import { pickLaunchSettings, providerLabel } from './pick-launch.js';
 import { detectGit } from '../core/requirements.js';
 import * as ansi from './ansi.js';
 
 /**
- * @param {{cwd: string}} input
+ * @param {{cwd: string, templateId?: string|null, name?: string|null}} input
+ *   templateId: saltea el selector (`storm new --template <id>`).
+ *   name: valor inicial del nombre del proyecto.
  * @returns {Promise<'cancelled'|'fallback'|'done'>}
  *   'fallback' = no había templates, el caller debe correr el wizard normal.
  */
-export async function runNewFromTemplateWizard({ cwd }) {
+export async function runNewFromTemplateWizard({ cwd, templateId = null, name = null }) {
   // Pre-flight: git is mandatory for cloning.
   const git = await detectGit();
   if (!git.installed) {
@@ -71,8 +70,14 @@ export async function runNewFromTemplateWizard({ cwd }) {
     return 'fallback';
   }
 
-  // Pick a template.
-  const pickedId = await clack.select({
+  // Pick a template (unless it came from --template).
+  if (templateId && !registry.some((t) => t.id === templateId)) {
+    clack.log.error(
+      `No existe el template "${templateId}". Disponibles: ${registry.map((t) => t.id).join(', ')}.`,
+    );
+    return 'cancelled';
+  }
+  const pickedId = templateId ?? await clack.select({
     message: 'Elegí un template',
     options: [
       ...registry.map((t) => ({
@@ -121,7 +126,7 @@ export async function runNewFromTemplateWizard({ cwd }) {
     const projectName = await clack.text({
       message: 'Nombre del proyecto',
       placeholder: meta.name,
-      initialValue: meta.name,
+      initialValue: name || meta.name,
       validate: (v) => (v?.trim() ? undefined : 'El nombre es obligatorio'),
     });
     if (clack.isCancel(projectName)) return cancelled();
@@ -140,34 +145,24 @@ export async function runNewFromTemplateWizard({ cwd }) {
       variables[v.key] = answered ?? '';
     }
 
-    // Provider + modelo.
-    const providerChoice = await clack.select({
-      message: '¿Qué proveedor de IA?',
-      options: PROVIDERS.map((p) => ({
-        value: p.id,
-        label: p.label,
-        hint: p.hint,
-      })),
-      initialValue: 'ollama-cloud',
+    // Agent → provider → modelo (defaults: config global).
+    const defProvider = await getDefaultProvider();
+    const launchPick = await pickLaunchSettings({
+      agent: await getDefaultAgent(),
+      launchCommand: await getDefaultLaunchCommand(),
+      provider: defProvider?.provider ?? 'ollama-cloud',
+      model: defProvider?.model ?? null,
     });
-    if (clack.isCancel(providerChoice)) return cancelled();
-
-    let model = { provider: providerChoice, name: null };
-    if (providerChoice === 'ollama-cloud') {
-      model = await pickOllamaCloudModel();
-      if (!model) return cancelled();
-    } else if (providerChoice === 'ollama-local') {
-      model = await pickOllamaLocalModel();
-      if (!model) return cancelled();
-    }
-    // Otherwise: 'claude'/'via-claude-code'/'via-opencode' don't pick a model.
+    if (!launchPick) return cancelled();
+    const { model } = launchPick;
 
     // Confirmation.
     const summary = [
       `Template:     ${ansi.cyan(meta.label)}`,
       `Nombre:       ${ansi.cyan(projectName)}`,
       `Carpeta:      ${ansi.dim(path.resolve(cwd, '.'))}`,
-      `Proveedor:    ${providerLabel(providerChoice)}${model.name ? ` (${model.name})` : ''}`,
+      `CLI:          ${agentLabel(launchPick.agent)}`,
+      `Proveedor:    ${providerLabel(model.provider)}${model.name ? ` (${model.name})` : ''}`,
       meta.postInstall?.length
         ? `Post-install: ${meta.postInstall.join(' && ')}`
         : null,
@@ -193,6 +188,9 @@ export async function runNewFromTemplateWizard({ cwd }) {
         cloneDir: cloneResult.cloneDir,
         metadata: meta,
         variables,
+        // agent/provider/model are applied below with updateProjectSettings,
+        // which also writes the chosen agent's scaffolding if the template
+        // shipped another one.
       });
       applySpinner.stop('Template aplicado');
     } catch (err) {
@@ -201,14 +199,19 @@ export async function runNewFromTemplateWizard({ cwd }) {
       return 'cancelled';
     }
 
-    // Persist the chosen model into the new project's config.
+    // Persist agent + provider + model into the new project's config.
+    // If the template shipped another agent's scaffolding, this also
+    // writes the files for the chosen one.
     try {
-      const { readConfig, writeConfig } = await import('../core/config.js');
-      const cfg = await readConfig(result.projectRoot);
-      cfg.model = { provider: model.provider, name: model.name ?? null };
-      await writeConfig(result.projectRoot, cfg);
+      const r = await updateProjectSettings(result.projectRoot, {
+        agent: launchPick.agent,
+        provider: model.provider,
+        model: model.name,
+        launchCommand: launchPick.launchCommand,
+      });
+      result.warnings.push(...r.notes);
     } catch (err) {
-      result.warnings.push(`No pude guardar el provider en el config: ${err.message}`);
+      result.warnings.push(`No pude guardar agent/provider en el config: ${err.message}`);
     }
 
     // Summary + warnings.
@@ -229,14 +232,14 @@ export async function runNewFromTemplateWizard({ cwd }) {
     lines.push('', `Proyecto: ${ansi.dim(result.projectRoot)}`);
     clack.note(lines.join('\n'), 'Listo');
 
-    // Auto-launch Claude Code.
+    // Auto-launch the chosen agent.
     const { launchForProject } = await import('../commands/launch.js');
     try {
       await launchForProject({ projectRoot: result.projectRoot });
     } catch (err) {
       clack.log.error(
-        `No pude abrir Claude Code automáticamente: ${err.message}\n` +
-          `Abrilo a mano:\n  cd "${result.projectRoot}"\n  claude`,
+        `No pude abrir ${agentLabel(launchPick.agent)} automáticamente: ${err.message}\n` +
+          `Abrilo después con:  storm open "${result.projectRoot}"`,
       );
     }
 
@@ -245,96 +248,6 @@ export async function runNewFromTemplateWizard({ cwd }) {
     // Always cleanup the temp clone, regardless of success/failure.
     await cloneResult.cleanup();
   }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers (clones of the wizard-new pickers — kept here so this file
-// is self-contained; the duplication is small.)
-// ---------------------------------------------------------------------------
-
-async function pickOllamaCloudModel() {
-  const options = [
-    ...CLOUD_MODELS.map((m) => ({ value: m.name, label: m.label, hint: m.hint })),
-    { value: '__other__', label: 'Otro...', hint: 'Escribir el nombre de cualquier modelo cloud' },
-  ];
-  const choice = await clack.select({
-    message: 'Elegí un modelo cloud',
-    options,
-    initialValue: 'kimi-k2.6:cloud',
-  });
-  if (clack.isCancel(choice)) return null;
-
-  if (choice === '__other__') {
-    const custom = await clack.text({
-      message: 'Nombre del modelo cloud (debe terminar en :cloud)',
-      placeholder: 'mi-modelo:cloud',
-      validate: (v) =>
-        v?.trim().endsWith(':cloud')
-          ? undefined
-          : 'Los modelos cloud terminan en ":cloud".',
-    });
-    if (clack.isCancel(custom)) return null;
-    return { provider: 'ollama-cloud', name: custom.trim() };
-  }
-  return { provider: 'ollama-cloud', name: choice };
-}
-
-async function pickOllamaLocalModel() {
-  const ollama = await detectOllama();
-  if (!ollama.installed) {
-    clack.log.warn('Ollama no está instalado. El proyecto se va a crear pero vas a tener que instalar Ollama antes de abrirlo.');
-  }
-  const spinner = clack.spinner();
-  spinner.start('Buscando modelos Ollama locales');
-  const local = ollama.installed ? await listOllamaModels() : [];
-  spinner.stop(`${local.length} modelo(s) local(es) detectado(s)`);
-
-  const detectedNames = new Set(local.map((m) => m.name));
-  const options = [];
-  for (const m of local) {
-    options.push({ value: m.name, label: m.name, hint: m.size ? `instalado · ${m.size}` : 'instalado' });
-  }
-  for (const m of LOCAL_RECOMMENDED) {
-    if (!detectedNames.has(m.name)) {
-      options.push({ value: m.name, label: m.label, hint: `${m.hint} · se descarga al elegirlo` });
-    }
-  }
-  options.push({ value: '__other__', label: 'Otro...', hint: 'Escribir el nombre de cualquier modelo local' });
-
-  const choice = await clack.select({ message: 'Elegí un modelo local', options });
-  if (clack.isCancel(choice)) return null;
-
-  let modelName;
-  if (choice === '__other__') {
-    const custom = await clack.text({
-      message: 'Nombre del modelo local',
-      placeholder: 'qwen3.5:9b',
-      validate: (v) => (v?.trim() ? undefined : 'El nombre es obligatorio'),
-    });
-    if (clack.isCancel(custom)) return null;
-    modelName = custom.trim();
-  } else {
-    modelName = choice;
-  }
-
-  if (ollama.installed && !detectedNames.has(modelName)) {
-    const pullConfirm = await clack.confirm({
-      message: `¿Descargar ${ansi.cyan(modelName)} ahora? (puede tardar varios minutos)`,
-      initialValue: true,
-    });
-    if (clack.isCancel(pullConfirm)) return null;
-    if (pullConfirm) {
-      clack.log.info(`Descargando ${modelName}...`);
-      const r = await pullOllamaModel(modelName);
-      if (!r.ok) clack.log.warn(`Falló la descarga: ${r.message}.`);
-      else clack.log.success(`${modelName} listo.`);
-    }
-  }
-  return { provider: 'ollama-local', name: modelName };
-}
-
-function providerLabel(p) {
-  return getProvider(p)?.label ?? p;
 }
 
 function cancelled() {

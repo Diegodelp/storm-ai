@@ -2,7 +2,7 @@
  * Wizard interactivo para `storm new`.
  *
  * Flujo: nombre → descripción → stack (lista) → base de datos (lista)
- *      → ramas iniciales → skills → agentes → provider → modelo
+ *      → ramas iniciales → skills → agentes → CLI (agent) → provider → modelo
  *      → confirmar → createProject() → launchForProject().
  *
  * Las ramas iniciales vienen pre-cargadas según el stack elegido.
@@ -13,14 +13,9 @@
 import * as clack from '@clack/prompts';
 
 import { createProject } from '../commands/new.js';
-import {
-  detectOllama,
-  listOllamaModels,
-  pullOllamaModel,
-  CLOUD_MODELS,
-  LOCAL_RECOMMENDED,
-  PROVIDERS,
-} from '../core/providers.js';
+import { getDefaultAgent, getDefaultProvider, getDefaultLaunchCommand } from '../core/global-config.js';
+import { agentLabel } from '../core/agents.js';
+import { pickLaunchSettings, providerLabel } from './pick-launch.js';
 import { STACKS, DATABASES, getStack, getDatabase } from '../core/stacks.js';
 import * as ansi from './ansi.js';
 
@@ -192,47 +187,17 @@ export async function runNewWizard({ cwd }) {
     }
   }
 
-  // ---- Provider + modelo ----
-  const providerChoice = await clack.select({
-    message: '¿Qué proveedor de IA?',
-    options: PROVIDERS.map((p) => ({
-      value: p.id,
-      label: p.label,
-      hint: p.hint,
-    })),
-    initialValue: 'ollama-cloud',
+  // ---- Agent (CLI) → provider → modelo ----
+  // Arrancamos desde los defaults globales (`storm config`).
+  const defProvider = await getDefaultProvider();
+  const launchPick = await pickLaunchSettings({
+    agent: await getDefaultAgent(),
+    launchCommand: await getDefaultLaunchCommand(),
+    provider: defProvider?.provider ?? 'ollama-cloud',
+    model: defProvider?.model ?? null,
   });
-  if (clack.isCancel(providerChoice)) return cancel();
-
-  let model = { provider: providerChoice, name: null };
-  if (providerChoice === 'ollama-cloud') {
-    model = await pickOllamaCloudModel();
-    if (!model) return cancel();
-  } else if (providerChoice === 'ollama-local') {
-    model = await pickOllamaLocalModel();
-    if (!model) return cancel();
-  }
-  // For 'claude', 'via-claude-code', 'via-opencode': model stays { provider, name: null }.
-
-  // ---- Agent (CLI) ----
-  const { AGENTS, getAgent } = await import('../core/agents.js');
-  const { getDefaultAgent } = await import('../core/global-config.js');
-  const defaultAgentId = await getDefaultAgent();
-
-  const agentChoice = await clack.select({
-    message: '¿Qué CLI vas a usar?',
-    options: [
-      ...AGENTS.map((a) => ({ value: a.id, label: a.label, hint: a.hint })),
-      { value: '__custom__', label: 'Otro... (configurar después con `storm config`)' },
-    ],
-    initialValue: defaultAgentId,
-  });
-  if (clack.isCancel(agentChoice)) return cancel();
-
-  const agentId = agentChoice === '__custom__' ? defaultAgentId : agentChoice;
-  const agentLabel = agentChoice === '__custom__'
-    ? 'custom (definí con `storm config`)'
-    : (getAgent(agentId)?.label ?? agentId);
+  if (!launchPick) return cancel();
+  const { agent: agentId, model } = launchPick;
 
   // ---- Resumen + confirmación ----
   const summary = [
@@ -243,8 +208,9 @@ export async function runNewWizard({ cwd }) {
     branches.length ? `Ramas:        ${branches.map((b) => b.path).join(', ')}` : null,
     (pickedSkills ?? []).length ? `Skills:       ${pickedSkills.join(', ')}` : null,
     agents.length ? `Agentes:      ${agents.map((a) => a.name).join(', ')}` : null,
-    `Proveedor:    ${providerLabel(providerChoice)}${model.name ? ` (${model.name})` : ''}`,
-    `CLI:          ${agentLabel}`,
+    `CLI:          ${agentLabel(agentId)}`,
+    `Proveedor:    ${providerLabel(model.provider)}${model.name ? ` (${model.name})` : ''}`,
+    launchPick.launchCommand ? `Comando:      ${launchPick.launchCommand}` : null,
     `Carpeta base: ${ansi.dim(cwd)}`,
   ].filter(Boolean).join('\n');
   clack.note(summary, 'Se va a crear');
@@ -273,6 +239,7 @@ export async function runNewWizard({ cwd }) {
       agents,
       model,
       agent: agentId,
+      launch: launchPick.launchCommand ? { customCommand: launchPick.launchCommand } : {},
     });
     spinner.stop('Proyecto creado');
   } catch (err) {
@@ -285,7 +252,7 @@ export async function runNewWizard({ cwd }) {
 
   clack.note(
     `${ansi.bold(result.safeName)} listo en\n  ${ansi.dim(result.projectRoot)}\n\n` +
-      'Abriendo Claude Code...',
+      `Abriendo ${agentLabel(agentId)}...`,
     'Listo',
   );
 
@@ -294,110 +261,10 @@ export async function runNewWizard({ cwd }) {
     await launchForProject({ projectRoot: result.projectRoot });
   } catch (err) {
     clack.log.error(
-      `No pude abrir Claude Code automáticamente: ${err.message}\n` +
-        `Abrilo a mano:\n  cd "${result.projectRoot}"\n  claude`,
+      `No pude abrir ${agentLabel(agentId)} automáticamente: ${err.message}\n` +
+        `Abrilo después con:  storm open "${result.projectRoot}"`,
     );
   }
-}
-
-// ---------------------------------------------------------------------------
-// Provider model pickers (sin cambios respecto de la versión previa)
-// ---------------------------------------------------------------------------
-
-async function pickOllamaCloudModel() {
-  const options = [
-    ...CLOUD_MODELS.map((m) => ({ value: m.name, label: m.label, hint: m.hint })),
-    { value: '__other__', label: 'Otro...', hint: 'Escribir el nombre de cualquier modelo cloud' },
-  ];
-
-  const choice = await clack.select({
-    message: 'Elegí un modelo cloud',
-    options,
-    initialValue: 'kimi-k2.6:cloud',
-  });
-  if (clack.isCancel(choice)) return null;
-
-  if (choice === '__other__') {
-    const custom = await clack.text({
-      message: 'Nombre del modelo cloud (tiene que terminar en :cloud)',
-      placeholder: 'mi-modelo:cloud',
-      validate: (v) =>
-        v?.trim().endsWith(':cloud')
-          ? undefined
-          : 'Los modelos cloud terminan en ":cloud".',
-    });
-    if (clack.isCancel(custom)) return null;
-    return { provider: 'ollama-cloud', name: custom.trim() };
-  }
-  return { provider: 'ollama-cloud', name: choice };
-}
-
-async function pickOllamaLocalModel() {
-  const ollama = await detectOllama();
-  if (!ollama.installed) {
-    clack.log.warn(
-      'Ollama no está instalado. El proyecto se va a crear pero vas a ' +
-        'tener que instalar Ollama antes de abrirlo.',
-    );
-  }
-
-  const spinner = clack.spinner();
-  spinner.start('Buscando modelos Ollama locales');
-  const local = ollama.installed ? await listOllamaModels() : [];
-  spinner.stop(`${local.length} modelo(s) local(es) detectado(s)`);
-
-  const detectedNames = new Set(local.map((m) => m.name));
-  const options = [];
-  for (const m of local) {
-    options.push({ value: m.name, label: m.name, hint: m.size ? `instalado · ${m.size}` : 'instalado' });
-  }
-  for (const m of LOCAL_RECOMMENDED) {
-    if (!detectedNames.has(m.name)) {
-      options.push({ value: m.name, label: m.label, hint: `${m.hint} · se descarga al elegirlo` });
-    }
-  }
-  options.push({ value: '__other__', label: 'Otro...', hint: 'Escribir el nombre de cualquier modelo local' });
-
-  const choice = await clack.select({ message: 'Elegí un modelo local', options });
-  if (clack.isCancel(choice)) return null;
-
-  let modelName;
-  if (choice === '__other__') {
-    const custom = await clack.text({
-      message: 'Nombre del modelo local',
-      placeholder: 'qwen3.5:9b',
-      validate: (v) => (v?.trim() ? undefined : 'El nombre es obligatorio'),
-    });
-    if (clack.isCancel(custom)) return null;
-    modelName = custom.trim();
-  } else {
-    modelName = choice;
-  }
-
-  if (ollama.installed && !detectedNames.has(modelName)) {
-    const pullConfirm = await clack.confirm({
-      message: `¿Descargar ${ansi.cyan(modelName)} ahora? (puede tardar varios minutos)`,
-      initialValue: true,
-    });
-    if (clack.isCancel(pullConfirm)) return null;
-
-    if (pullConfirm) {
-      clack.log.info(`Descargando ${modelName}...`);
-      const result = await pullOllamaModel(modelName);
-      if (!result.ok) {
-        clack.log.warn(`Falló la descarga: ${result.message}. Volvé a intentar: ollama pull ${modelName}`);
-      } else {
-        clack.log.success(`${modelName} listo.`);
-      }
-    }
-  }
-  return { provider: 'ollama-local', name: modelName };
-}
-
-function providerLabel(p) {
-  // Use the canonical PROVIDERS catalog as the source of truth.
-  const found = PROVIDERS.find((x) => x.id === p);
-  return found?.label ?? p;
 }
 
 function cancel() {

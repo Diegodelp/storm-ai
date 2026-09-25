@@ -23,6 +23,7 @@ import { pick } from './picker.js';
 import * as ansi from './ansi.js';
 import { centerLine, centerBlock, termWidth, termHeight, horizontalRule } from './layout.js';
 import { getVersion } from '../core/version.js';
+import { runMenuAction } from './menu-action.js';
 
 const VERSION = getVersion();
 
@@ -128,17 +129,17 @@ export async function runInteractiveMenu({ cwd }) {
     // Clack imprime lineal (no responsivo), así que limpiamos la pantalla.
     process.stdout.write('\x1bc');
 
-    try {
+    const backToMenu = await runMenuAction(async () => {
       if (choice === 'new') {
-        await runNewWizard({ cwd });
+        return runNewWizard({ cwd });
       } else if (choice === 'open') {
-        await runOpenWizard({ cwd });
+        return runOpenWizard({ cwd });
       } else if (choice === 'import') {
         const { runImportWizard } = await import('./wizard-import.js');
-        await runImportWizard({ cwd });
+        return runImportWizard({ cwd });
       } else if (choice === 'config') {
         const { runConfigWizard } = await import('./wizard-config.js');
-        await runConfigWizard({ cwd });
+        return runConfigWizard({ cwd });
       } else if (choice === 'install') {
         const spinner = clack.spinner();
         spinner.start('Instalando acceso directo');
@@ -154,15 +155,7 @@ export async function runInteractiveMenu({ cwd }) {
           clack.note(result.nextSteps.join('\n'), 'Próximos pasos');
         }
       }
-    } catch (err) {
-      clack.log.error(err?.message ?? String(err));
-      if (process.env.STORM_DEBUG) {
-        console.error(err?.stack);
-      }
-    }
-
-    // Pausa breve antes de volver al menú principal, así el usuario
-    // ve el resultado antes de que limpiemos la pantalla.
-    await new Promise((r) => setTimeout(r, 250));
+    });
+    if (!backToMenu) return;
   }
 }

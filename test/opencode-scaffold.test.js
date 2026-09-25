@@ -71,8 +71,9 @@ test('renderOpencodeCommand: includes the body and has a knowledge-base banner',
     summary: 'A test command',
     body: '# Test command\n\nDo `storm test` to test things.\n',
   });
-  // Banner: tells the reader that OpenCode does NOT execute this file.
-  assert.match(out, /not executed|knowledge base|reference document/i);
+  // Frontmatter: OpenCode shows `description` in its command picker.
+  assert.match(out, /^---\ndescription: "A test command"\n---\n/);
+  assert.match(out, /reference document/i);
   // Body content shows up.
   assert.match(out, /Do `storm test`/);
 });
@@ -85,6 +86,7 @@ test('renderOpencodeAgent: includes the body', () => {
     body: '# Test\n\nDo important things.\n',
   });
   assert.match(out, /Do important things/);
+  assert.match(out, /^---\ndescription: "Test Agent"\nmode: subagent\n---\n/);
 });
 
 test('renderOpencodeIndex: lists every command and agent with correct paths', () => {
