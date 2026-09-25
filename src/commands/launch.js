@@ -68,10 +68,18 @@ export async function launchForProject(input) {
       shell: platform() === 'win32',
       env,
     });
-    proc.on('error', (err) => reject(err));
+    proc.on('error', (err) => {
+      const detail = err.code === 'ENOENT'
+        ? `No se encontró \`${command}\`. Verificá que esté instalado y disponible en PATH; podés instalar el CLI desde \`storm config\`.`
+        : `No se pudo ejecutar \`${command}\`: ${err.message}`;
+      reject(new Error(`${detail}\nProyecto: ${input.projectRoot}`, { cause: err }));
+    });
     proc.on('close', (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`\`${command}\` terminó con ${signal ? `señal ${signal}` : `código ${code}`}.`));
+      else reject(new Error(
+        `\`${command}\` terminó con ${signal ? `señal ${signal}` : `código ${code}`}.\n` +
+          `Proyecto: ${input.projectRoot}\nRevisá el mensaje del CLI que aparece arriba.`,
+      ));
     });
   });
 }
