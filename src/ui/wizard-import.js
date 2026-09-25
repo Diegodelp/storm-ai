@@ -325,7 +325,8 @@ export async function runImportWizard(input) {
 async function askProvider(current) {
   const p = await pickProvider({
     message: '¿Con qué proveedor de IA analizar?',
-    initialValue: current?.provider ?? 'ollama-cloud',
+    initialValue: current?.provider ?? null,
+    suggestFor: await getDefaultAgent(),
   });
   if (!p) return null;
   const m = await pickModel(p, {

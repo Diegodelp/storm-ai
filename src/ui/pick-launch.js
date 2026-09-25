@@ -4,7 +4,9 @@
  * Every wizard that asks "which agent, which provider, which model" goes
  * through here, so they all:
  *   - ask the agent FIRST and only offer providers that can launch it,
- *   - start from the current / default values,
+ *   - start from the current / default values, unless they need Ollama
+ *     and Ollama isn't available (then the agent's own via-* provider),
+ *   - flag the Ollama options when Ollama isn't installed/reachable,
  *   - accept the same model names.
  *
  * All functions return null when the user cancels (Esc).
@@ -22,8 +24,10 @@ import {
   getProvider,
   providerNeedsModel,
   isCloudModelName,
+  isOllamaAvailable,
+  isOllamaProvider,
 } from '../core/providers.js';
-import { AGENTS, getAgent, getCompatibleProviders } from '../core/agents.js';
+import { AGENTS, getAgent, getCompatibleProviders, suggestProvider } from '../core/agents.js';
 import * as ansi from './ansi.js';
 
 /**
@@ -64,26 +68,57 @@ export async function pickAgent(opts = {}) {
 
 /**
  * Pick a provider. With `agentId`, only providers that can launch that
- * agent are offered (custom agents accept all).
+ * agent are offered (custom agents accept all). When Ollama isn't
+ * available, its options are flagged, the pre-selection avoids them and
+ * picking one asks for confirmation.
  *
- * @param {{agentId?: string, initialValue?: string, message?: string}} [opts]
+ * @param {{agentId?: string, suggestFor?: string, initialValue?: string|null,
+ *          message?: string, ollamaAvailable?: boolean}} [opts]
+ *   suggestFor: agent used only to choose the pre-selection (no filtering).
  * @returns {Promise<string|null>}
  */
 export async function pickProvider(opts = {}) {
+  const ollamaAvailable = opts.ollamaAvailable ?? await isOllamaAvailable();
   const compatible = opts.agentId ? getCompatibleProviders(opts.agentId) : null;
   const options = PROVIDERS
     .filter((p) => compatible === null || compatible.includes(p.id))
-    .map((p) => ({ value: p.id, label: p.label, hint: p.hint }));
-  const initial = options.some((o) => o.value === opts.initialValue)
-    ? opts.initialValue
-    : options[0].value;
-
-  const choice = await clack.select({
-    message: opts.message ?? '¿Qué proveedor de IA?',
-    options,
-    initialValue: initial,
+    .map((p) => ({
+      value: p.id,
+      label: p.label,
+      hint: isOllamaProvider(p.id) && !ollamaAvailable
+        ? 'Requiere Ollama — no detectado en esta máquina'
+        : p.hint,
+    }));
+  const suggested = suggestProvider({
+    agentId: opts.agentId ?? opts.suggestFor ?? null,
+    preferred: opts.initialValue ?? null,
+    ollamaAvailable,
   });
-  return clack.isCancel(choice) ? null : choice;
+  const initial = options.some((o) => o.value === suggested) ? suggested : options[0].value;
+
+  if (!ollamaAvailable) {
+    clack.log.info(ansi.dim(
+      'Ollama no está instalado ni responde en OLLAMA_HOST. Si usás los modelos de tu CLI ' +
+        '(OpenCode, Claude Code), elegí "Via ..." y storm no le cambia el modelo.',
+    ));
+  }
+
+  while (true) {
+    const choice = await clack.select({
+      message: opts.message ?? '¿Qué proveedor de IA?',
+      options,
+      initialValue: initial,
+    });
+    if (clack.isCancel(choice)) return null;
+    if (!isOllamaProvider(choice) || ollamaAvailable) return choice;
+
+    const sure = await clack.confirm({
+      message: 'Ollama no está disponible: el agent no va a poder usar ese provider hasta que lo instales. ¿Usarlo igual?',
+      initialValue: false,
+    });
+    if (clack.isCancel(sure)) return null;
+    if (sure) return choice;
+  }
 }
 
 /**
@@ -105,13 +140,19 @@ export async function pickModel(provider, opts = {}) {
 /**
  * Agent → provider → model, in that order.
  *
- * @param {{agent?: string, launchCommand?: string|null, provider?: string, model?: string|null}} [initial]
+ * @param {{agent?: string, launchCommand?: string|null, provider?: string|null, model?: string|null,
+ *          ollamaAvailable?: boolean}} [initial]
+ *   provider null/undefined → suggested from the agent (see suggestProvider).
  * @returns {Promise<{agent: string, launchCommand: string|null, model: {provider: string, name: string|null}}|null>}
  */
 export async function pickLaunchSettings(initial = {}) {
   const agent = await pickAgent({ initialValue: initial.agent, launchCommand: initial.launchCommand });
   if (!agent) return null;
-  const provider = await pickProvider({ agentId: agent.agent, initialValue: initial.provider });
+  const provider = await pickProvider({
+    agentId: agent.agent,
+    initialValue: initial.provider,
+    ollamaAvailable: initial.ollamaAvailable,
+  });
   if (!provider) return null;
   const model = await pickModel(provider, {
     initialValue: provider === initial.provider ? initial.model : null,

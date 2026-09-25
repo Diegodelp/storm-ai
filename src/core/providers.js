@@ -132,6 +132,31 @@ export function validateProviderModel(provider, model) {
   return null;
 }
 
+/** Is this one of the providers served through Ollama? */
+export function isOllamaProvider(id) {
+  return id === 'ollama-cloud' || id === 'ollama-local';
+}
+
+/**
+ * Can this machine use Ollama? True when the `ollama` CLI is installed or
+ * a daemon answers at OLLAMA_HOST (remote daemons count, no CLI needed).
+ * Dependencies are injectable for tests.
+ *
+ * @param {{detect?: typeof detectOllama, getHost?: () => Promise<string>, fetchImpl?: typeof fetch}} [deps]
+ * @returns {Promise<boolean>}
+ */
+export async function isOllamaAvailable(deps = {}) {
+  const detect = deps.detect ?? detectOllama;
+  if ((await detect()).installed) return true;
+  try {
+    const host = await (deps.getHost ?? getOllamaHost)();
+    const res = await (deps.fetchImpl ?? fetch)(`${host}/api/version`, { signal: AbortSignal.timeout(1500) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Curated list of recommended cloud models. These run on Ollama's hosted
  * infrastructure (https://ollama.com) and don't require a local download.
