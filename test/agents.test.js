@@ -35,14 +35,14 @@ test('getAgent: returns null for unknown ids', () => {
   assert.ok(getAgent('opencode'));
 });
 
-test('buildAgentLaunchCommand: claude-code + ollama-cloud uses ollama launch claude', () => {
+test('buildAgentLaunchCommand: claude-code + ollama-cloud launches claude with native settings', () => {
   const r = buildAgentLaunchCommand({
     provider: 'ollama-cloud',
     agentId: 'claude-code',
     modelName: 'kimi-k2.6:cloud',
   });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'claude', '--model', 'kimi-k2.6:cloud']);
+  assert.equal(r.command, 'claude');
+  assert.deepEqual(r.args, ['--model', 'kimi-k2.6:cloud']);
 });
 
 test('buildAgentLaunchCommand: claude-code + ollama-local same shape', () => {
@@ -51,8 +51,8 @@ test('buildAgentLaunchCommand: claude-code + ollama-local same shape', () => {
     agentId: 'claude-code',
     modelName: 'qwen3.5:9b',
   });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'claude', '--model', 'qwen3.5:9b']);
+  assert.equal(r.command, 'claude');
+  assert.deepEqual(r.args, ['--model', 'qwen3.5:9b']);
 });
 
 test('buildAgentLaunchCommand: claude-code + claude provider runs `claude` directly', () => {
@@ -65,24 +65,24 @@ test('buildAgentLaunchCommand: claude-code + claude provider runs `claude` direc
   assert.deepEqual(r.args, []);
 });
 
-test('buildAgentLaunchCommand: opencode + ollama-cloud uses ollama launch opencode', () => {
+test('buildAgentLaunchCommand: opencode + ollama-cloud launches opencode with native settings', () => {
   const r = buildAgentLaunchCommand({
     provider: 'ollama-cloud',
     agentId: 'opencode',
     modelName: 'glm-4.7:cloud',
   });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'opencode', '--model', 'glm-4.7:cloud']);
+  assert.equal(r.command, 'opencode');
+  assert.deepEqual(r.args, ['--model', 'ollama/glm-4.7:cloud']);
 });
 
-test('buildAgentLaunchCommand: opencode + ollama-local also uses ollama launch opencode', () => {
+test('buildAgentLaunchCommand: opencode + ollama-local also launches opencode with native settings', () => {
   const r = buildAgentLaunchCommand({
     provider: 'ollama-local',
     agentId: 'opencode',
     modelName: 'qwen3-coder',
   });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'opencode', '--model', 'qwen3-coder']);
+  assert.equal(r.command, 'opencode');
+  assert.deepEqual(r.args, ['--model', 'ollama/qwen3-coder']);
 });
 
 test('buildAgentLaunchCommand: opencode + claude provider runs `opencode` directly', () => {
@@ -93,6 +93,14 @@ test('buildAgentLaunchCommand: opencode + claude provider runs `opencode` direct
   });
   assert.equal(r.command, 'opencode');
   assert.deepEqual(r.args, []);
+});
+
+test('buildAgentLaunchCommand: via-* providers launch the independently selected agent', () => {
+  for (const provider of ['via-claude-code', 'via-opencode']) {
+    for (const [agentId, command] of [['claude-code', 'claude'], ['opencode', 'opencode']]) {
+      assert.deepEqual(buildAgentLaunchCommand({ provider, agentId, modelName: null }), { command, args: [] });
+    }
+  }
 });
 
 test('buildAgentLaunchCommand: throws when ollama provider has no model', () => {

@@ -23,9 +23,8 @@ import {
   setDefaultProvider,
 } from '../core/global-config.js';
 import {
-  detectOllama,
+  listOllamaModels,
   CLOUD_MODELS,
-  LOCAL_RECOMMENDED,
   PROVIDERS,
 } from '../core/providers.js';
 import { STACKS, DATABASES, getStack, getDatabase } from '../core/stacks.js';
@@ -309,14 +308,14 @@ async function askProvider() {
     return { provider: 'ollama-cloud', model: m };
   }
   // ollama-local
-  const status = await detectOllama();
-  if (!status.installed) {
-    clack.log.warn('Ollama no está instalado en tu máquina. Instalalo y volvé a probar.');
+  const installed = await listOllamaModels();
+  if (!installed.length) {
+    clack.log.warn('No se detectaron modelos locales. Revisá OLLAMA_HOST y descargá uno con `ollama pull <modelo>`.');
     return null;
   }
   const m = await clack.select({
     message: 'Modelo local',
-    options: LOCAL_RECOMMENDED.map((x) => ({ value: x.name, label: x.label, hint: x.hint })),
+    options: installed.map((x) => ({ value: x.name, label: x.name, hint: x.size || 'Instalado' })),
   });
   if (clack.isCancel(m)) return null;
   return { provider: 'ollama-local', model: m };

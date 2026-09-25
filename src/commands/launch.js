@@ -2,8 +2,8 @@
  * `storm launch` — open the project by spawning the configured agent.
  *
  * The (provider, agent, model) tuple decides what to spawn:
- *   - Ollama cloud + Claude Code → `ollama launch claude --model <m>`
- *   - Ollama cloud + OpenCode    → `ollama launch opencode --model <m>`
+ *   - Ollama + Claude Code → native settings + `claude --model <m>`
+ *   - Ollama + OpenCode    → native config + `opencode --model ollama/<m>`
  *   - Claude API + Claude Code   → `claude`
  *   - Claude API + OpenCode      → `opencode`
  *
@@ -21,6 +21,8 @@ import { platform } from 'node:os';
 import { readConfig } from '../core/config.js';
 import { requireProjectRoot } from '../core/paths.js';
 import { buildAgentLaunchCommand } from '../core/agents.js';
+import { getOllamaHost } from '../core/global-config.js';
+import { syncAgentConfig } from '../core/agent-config.js';
 
 /**
  * @param {{cwd: string}} input
@@ -38,9 +40,11 @@ export async function launch(input) {
  * @returns {Promise<void>}
  */
 export async function launchForProject(input) {
+  const prepared = await syncAgentConfig(input.projectRoot, { strict: true });
+  for (const warning of prepared.warnings) console.warn(warning);
   const config = await readConfig(input.projectRoot);
   const provider = config.model?.provider ?? 'claude';
-  const modelName = config.model?.name ?? null;
+  const modelName = prepared.modelName;
   const agentId = config.agent ?? 'claude-code';
   const customCommand = config.launch?.customCommand ?? null;
 
@@ -51,14 +55,24 @@ export async function launchForProject(input) {
     customCommand,
   });
 
+  // Keep subprocesses pointed at the same host used for project analysis.
+  const env = { ...process.env };
+  if (provider === 'ollama-cloud' || provider === 'ollama-local') {
+    env.OLLAMA_HOST = await getOllamaHost();
+  }
+
   return new Promise((resolve, reject) => {
     const proc = spawn(command, args, {
       cwd: input.projectRoot,
       stdio: 'inherit',
       shell: platform() === 'win32',
+      env,
     });
     proc.on('error', (err) => reject(err));
-    proc.on('exit', () => resolve());
+    proc.on('close', (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`\`${command}\` terminó con ${signal ? `señal ${signal}` : `código ${code}`}.`));
+    });
   });
 }
 

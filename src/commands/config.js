@@ -87,7 +87,8 @@ export async function setConfigValue(key, value) {
   switch (key) {
     case 'provider': {
       const cfg = await readGlobalConfig();
-      const model = cfg.defaultProvider?.model ?? null;
+      // Model names belong to a provider; never carry an Ollama model into Claude.
+      const model = cfg.defaultProvider?.provider === value ? cfg.defaultProvider.model ?? null : null;
       await setDefaultProvider({ provider: value, model });
       return;
     }

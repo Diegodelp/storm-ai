@@ -331,7 +331,7 @@ export async function runCli(argv) {
   // -------------------------------------------------------------------------
   program
     .command('launch')
-    .description('Launch Claude Code using the configured provider/model.')
+    .description('Launch the selected agent using the configured provider/model.')
     .action(async () => {
       await launchCmd({ cwd: process.cwd() });
     });
@@ -445,7 +445,7 @@ export async function runCli(argv) {
     .description('Importa un proyecto existente: analiza con LLM y agrega scaffolding storm.')
     .option('-y, --yes', 'Pisar archivos existentes sin preguntar (no interactivo).')
     .option('--mode <mode>', 'Profundidad del análisis: shallow | deep.')
-    .option('--provider <id>', 'Provider del LLM: ollama-cloud | ollama-local | claude.')
+    .option('--provider <id>', 'Provider del LLM: ollama-cloud | ollama-local | claude | via-claude-code | via-opencode.')
     .option('--model <name>', 'Nombre del modelo (e.g. kimi-k2.6:cloud).')
     .option('--agent <id>', 'Agent (CLI): claude-code | opencode | <custom>.')
     .option('--name <name>', 'Nombre del proyecto.')

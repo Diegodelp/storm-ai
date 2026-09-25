@@ -9,7 +9,7 @@
   "main": "./src/cli.js",
   "scripts": {
     "start": "node bin/storm.js",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"
@@ -47,6 +47,7 @@
     "@babel/traverse": "^7.25.0",
     "@clack/prompts": "^0.7.0",
     "commander": "^12.1.0",
+    "jsonc-parser": "^3.3.1",
     "sharp": "^0.33.5",
     "string-width": "^8.2.0"
   }

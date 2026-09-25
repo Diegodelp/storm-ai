@@ -337,13 +337,13 @@ async function pickOllamaLocalModel() {
   if (!ollama.installed) {
     clack.log.warn(
       'Ollama no está instalado. El proyecto se va a crear pero vas a ' +
-        'tener que instalar Ollama antes de abrirlo.',
+        'necesitar un daemon accesible en OLLAMA_HOST para usar los modelos.',
     );
   }
 
   const spinner = clack.spinner();
   spinner.start('Buscando modelos Ollama locales');
-  const local = ollama.installed ? await listOllamaModels() : [];
+  const local = await listOllamaModels();
   spinner.stop(`${local.length} modelo(s) local(es) detectado(s)`);
 
   const detectedNames = new Set(local.map((m) => m.name));

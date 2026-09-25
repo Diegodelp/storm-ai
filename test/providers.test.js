@@ -37,16 +37,16 @@ test('LOCAL_RECOMMENDED entries are well-formed and do NOT end in :cloud', () =>
   }
 });
 
-test('buildCommand for ollama-cloud: uses `ollama launch claude --model`', () => {
+test('buildCommand for ollama-cloud: uses `claude --model` with native settings', () => {
   const r = buildCommand({ provider: 'ollama-cloud', modelName: 'kimi-k2.6:cloud' });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'claude', '--model', 'kimi-k2.6:cloud']);
+  assert.equal(r.command, 'claude');
+  assert.deepEqual(r.args, ['--model', 'kimi-k2.6:cloud']);
 });
 
 test('buildCommand for ollama-local: same as cloud', () => {
   const r = buildCommand({ provider: 'ollama-local', modelName: 'glm-4.7-flash' });
-  assert.equal(r.command, 'ollama');
-  assert.deepEqual(r.args, ['launch', 'claude', '--model', 'glm-4.7-flash']);
+  assert.equal(r.command, 'claude');
+  assert.deepEqual(r.args, ['--model', 'glm-4.7-flash']);
 });
 
 test('buildCommand for claude provider: runs `claude` directly', () => {

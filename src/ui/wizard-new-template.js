@@ -31,6 +31,8 @@ import {
   getProvider,
 } from '../core/providers.js';
 import { detectGit } from '../core/requirements.js';
+import { AGENTS } from '../core/agents.js';
+import { getDefaultAgent } from '../core/global-config.js';
 import * as ansi from './ansi.js';
 
 /**
@@ -162,12 +164,20 @@ export async function runNewFromTemplateWizard({ cwd }) {
     }
     // Otherwise: 'claude'/'via-claude-code'/'via-opencode' don't pick a model.
 
+    const agent = await clack.select({
+      message: '¿Qué CLI vas a usar?',
+      options: AGENTS.map((a) => ({ value: a.id, label: a.label, hint: a.hint })),
+      initialValue: await getDefaultAgent(),
+    });
+    if (clack.isCancel(agent)) return cancelled();
+
     // Confirmation.
     const summary = [
       `Template:     ${ansi.cyan(meta.label)}`,
       `Nombre:       ${ansi.cyan(projectName)}`,
       `Carpeta:      ${ansi.dim(path.resolve(cwd, '.'))}`,
       `Proveedor:    ${providerLabel(providerChoice)}${model.name ? ` (${model.name})` : ''}`,
+      `CLI:          ${agent}`,
       meta.postInstall?.length
         ? `Post-install: ${meta.postInstall.join(' && ')}`
         : null,
@@ -193,22 +203,14 @@ export async function runNewFromTemplateWizard({ cwd }) {
         cloneDir: cloneResult.cloneDir,
         metadata: meta,
         variables,
+        model,
+        agent,
       });
       applySpinner.stop('Template aplicado');
     } catch (err) {
       applySpinner.stop(ansi.red('Falló'));
       clack.log.error(err.message ?? String(err));
       return 'cancelled';
-    }
-
-    // Persist the chosen model into the new project's config.
-    try {
-      const { readConfig, writeConfig } = await import('../core/config.js');
-      const cfg = await readConfig(result.projectRoot);
-      cfg.model = { provider: model.provider, name: model.name ?? null };
-      await writeConfig(result.projectRoot, cfg);
-    } catch (err) {
-      result.warnings.push(`No pude guardar el provider en el config: ${err.message}`);
     }
 
     // Summary + warnings.
@@ -235,8 +237,8 @@ export async function runNewFromTemplateWizard({ cwd }) {
       await launchForProject({ projectRoot: result.projectRoot });
     } catch (err) {
       clack.log.error(
-        `No pude abrir Claude Code automáticamente: ${err.message}\n` +
-          `Abrilo a mano:\n  cd "${result.projectRoot}"\n  claude`,
+        `No pude abrir ${agent} automáticamente: ${err.message}\n` +
+          `Volvé a intentar:\n  cd "${result.projectRoot}"\n  storm launch`,
       );
     }
 
@@ -282,11 +284,11 @@ async function pickOllamaCloudModel() {
 async function pickOllamaLocalModel() {
   const ollama = await detectOllama();
   if (!ollama.installed) {
-    clack.log.warn('Ollama no está instalado. El proyecto se va a crear pero vas a tener que instalar Ollama antes de abrirlo.');
+    clack.log.info('Ollama CLI no está instalado. Buscando modelos en el daemon configurado en OLLAMA_HOST.');
   }
   const spinner = clack.spinner();
   spinner.start('Buscando modelos Ollama locales');
-  const local = ollama.installed ? await listOllamaModels() : [];
+  const local = await listOllamaModels();
   spinner.stop(`${local.length} modelo(s) local(es) detectado(s)`);
 
   const detectedNames = new Set(local.map((m) => m.name));

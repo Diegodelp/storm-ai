@@ -100,6 +100,37 @@ keys in storm at all. If you've already authenticated OpenCode against
 ChatGPT (via web auth), you can use that quota for storm's project
 analysis just by selecting `--provider via-opencode`.
 
+For `via-*`, `storm launch` opens the selected **agent** with that agent's
+own configuration. The CLI used for import analysis can differ from the
+interactive agent. OpenCode analysis uses `opencode run --format json`
+([CLI reference](https://opencode.ai/docs/cli/#run)); prompts are sent on stdin.
+
+Ollama uses `OLLAMA_HOST` from the environment first, then the saved
+`storm config set ollamaHost <url>` value, then `http://127.0.0.1:11434`.
+The same host is used for analysis, model listing, downloads, and launch.
+When scaffolding or launching an Ollama project without `model.name`, Storm
+chooses an installed model for that provider, preferring its recommended
+models when available. Local mode never falls back to a cloud model or
+downloads one automatically. Discovery also works against a remote daemon
+without an Ollama CLI installed on this machine. Changing providers with
+`storm config set provider` clears the old model.
+
+`storm new`, `storm import`, templates, and `storm launch` generate and
+synchronize the selected CLI's native project configuration:
+
+| CLI | File | Generated settings |
+|---|---|---|
+| Claude Code | `.claude/settings.local.json` | Selected model; Ollama endpoint, placeholder authentication, and model aliases when using Ollama. |
+| OpenCode | `opencode.json` (or existing JSON/JSONC config) | Selected `provider/model`, Ollama connection, available models, and the scaffold's instructions file. |
+
+Storm launches `claude` or `opencode` directly with these files. The formats
+follow Ollama's [Claude Code](https://docs.ollama.com/integrations/claude-code)
+and [OpenCode](https://docs.ollama.com/integrations/opencode) integrations.
+Existing unrelated settings and JSONC comments are preserved. Generated
+fields are tracked in `.storm/agent-config.json` so provider changes can
+remove stale routing; manually changed values are retained. Global API keys
+and login sessions are not copied. Custom launch commands bypass this setup.
+
 And two coding agents:
 
 - **Claude Code** — `claude` CLI from Anthropic. Storm scaffolds `CLAUDE.md`

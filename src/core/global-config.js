@@ -151,7 +151,13 @@ export async function setDefaultLaunchCommand(cmd) {
  */
 export async function getOllamaHost() {
   const cfg = await readGlobalConfig();
-  return cfg.ollamaHost ?? 'http://127.0.0.1:11434';
+  const host = process.env.OLLAMA_HOST?.trim() || cfg.ollamaHost?.trim() || 'http://127.0.0.1:11434';
+  // Ollama accepts host:port as well as a full URL. fetch requires a scheme.
+  const url = new URL(host.includes('://') ? host : `http://${host}`);
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('OLLAMA_HOST debe usar http o https.');
+  }
+  return url.toString().replace(/\/+$/, '');
 }
 
 /**

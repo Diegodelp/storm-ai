@@ -31,6 +31,7 @@ import { safeName, projectPaths, fileExists } from '../core/paths.js';
 import { writeState, regenerateTasksMd } from '../core/tasks.js';
 import { getStack } from '../core/stacks.js';
 import { getDefaultAgent } from '../core/global-config.js';
+import { syncAgentConfig } from '../core/agent-config.js';
 import {
   BUILTIN_OPENCODE_COMMANDS,
   BUILTIN_OPENCODE_AGENTS,
@@ -223,6 +224,14 @@ export async function createProject(input) {
     createdFiles.push(
       path.join('.context-compact', b.path.replaceAll('/', '-') + '.md'),
     );
+  }
+
+  try {
+    const native = await syncAgentConfig(projectRoot);
+    createdFiles.push(...native.createdFiles);
+    warnings.push(...native.warnings);
+  } catch (err) {
+    warnings.push(`No pude autoconfigurar el CLI: ${err.message}`);
   }
 
   return {

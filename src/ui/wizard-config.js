@@ -18,7 +18,7 @@ import {
   resetConfig,
   CONFIG_FILE_PATH,
 } from '../commands/config.js';
-import { CLOUD_MODELS, LOCAL_RECOMMENDED, detectOllama, PROVIDERS } from '../core/providers.js';
+import { CLOUD_MODELS, LOCAL_RECOMMENDED, detectOllama, listOllamaModels, PROVIDERS } from '../core/providers.js';
 import { AGENTS, detectAgent, installAgent } from '../core/agents.js';
 import * as ansi from './ansi.js';
 import { platform } from 'node:os';
@@ -125,10 +125,14 @@ async function editProvider() {
       model = choice;
     }
   } else if (provider === 'ollama-local') {
+    const installed = await listOllamaModels();
+    const names = new Set(installed.map((m) => m.name));
     const choice = await clack.select({
       message: 'Modelo local',
       options: [
-        ...LOCAL_RECOMMENDED.map((m) => ({ value: m.name, label: m.label, hint: m.hint })),
+        ...installed.map((m) => ({ value: m.name, label: m.name, hint: 'Instalado' })),
+        ...LOCAL_RECOMMENDED.filter((m) => !names.has(m.name) && !names.has(`${m.name}:latest`))
+          .map((m) => ({ value: m.name, label: m.label, hint: `${m.hint} · requiere descarga` })),
         { value: '__custom__', label: 'Custom...' },
         { value: BACK,         label: '← Volver (provider quedó seteado, modelo no)' },
       ],

@@ -11,6 +11,9 @@
  *   OpenCode            OK             OK             OK
  *   <custom>            user-defined launch command
  *
+ * The via-* providers choose the CLI for import analysis. Interactive launch
+ * uses the independently selected agent and that agent's own configuration.
+ *
  * Each agent declares:
  *   - id, label, hint     (for the wizard)
  *   - launchTemplate      template strings used to build the spawn command
@@ -56,12 +59,14 @@ export const AGENTS = [
   {
     id: 'claude-code',
     label: 'Claude Code',
-    hint: 'CLI oficial de Anthropic. Soporta Ollama cloud/local vía `ollama launch claude`.',
+    hint: 'CLI oficial de Anthropic. Storm configura Anthropic u Ollama por proyecto.',
     detectCommand: 'claude --version',
     launchTemplates: {
-      'ollama-cloud': { command: 'ollama', args: ['launch', 'claude', '--model', '{{model}}'] },
-      'ollama-local': { command: 'ollama', args: ['launch', 'claude', '--model', '{{model}}'] },
+      'ollama-cloud': { command: 'claude', args: [] },
+      'ollama-local': { command: 'claude', args: [] },
       'claude':       { command: 'claude', args: [] },
+      'via-claude-code': { command: 'claude', args: [] },
+      'via-opencode':    { command: 'claude', args: [] },
     },
     install: {
       // Linux / macOS: official one-liner from claude.ai/install.sh.
@@ -78,14 +83,16 @@ export const AGENTS = [
   {
     id: 'opencode',
     label: 'OpenCode',
-    hint: 'CLI open-source. Soporta Ollama cloud/local vía `ollama launch opencode`.',
+    hint: 'CLI open-source. Storm configura el provider y los modelos por proyecto.',
     detectCommand: 'opencode --version',
     launchTemplates: {
-      'ollama-cloud': { command: 'ollama', args: ['launch', 'opencode', '--model', '{{model}}'] },
-      'ollama-local': { command: 'ollama', args: ['launch', 'opencode', '--model', '{{model}}'] },
+      'ollama-cloud': { command: 'opencode', args: [] },
+      'ollama-local': { command: 'opencode', args: [] },
       // OpenCode standalone reads config from ~/.config/opencode/opencode.json
       // and can use Anthropic via that config. We just spawn the binary.
       'claude':       { command: 'opencode', args: [] },
+      'via-claude-code': { command: 'opencode', args: [] },
+      'via-opencode':    { command: 'opencode', args: [] },
     },
     install: {
       linux:  'curl -fsSL https://opencode.ai/install | bash',
@@ -191,6 +198,15 @@ export function buildAgentLaunchCommand({ provider, agentId = 'claude-code', mod
   }
 
   const args = tmpl.args.map((a) => substituteModel(a, modelName));
+  if (modelName) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/@+\[\]-]*$/.test(modelName)) {
+      throw new Error('Nombre de modelo inválido: usá el identificador del provider, sin espacios ni comandos de shell.');
+    }
+    const model = agentId === 'opencode' && provider.startsWith('ollama-') ? `ollama/${modelName}`
+      : agentId === 'opencode' && provider === 'claude' ? `anthropic/${modelName.replace(/^anthropic\//, '')}`
+      : modelName;
+    args.push('--model', model);
+  }
   return { command: tmpl.command, args };
 }
 

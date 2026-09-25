@@ -20,6 +20,7 @@ import { scanProject, buildAnalysisPrompt } from '../core/analyze.js';
 import { complete } from '../core/llm-client.js';
 import { parseAnalysis } from '../core/parse-analysis.js';
 import { createConfig, writeConfig, readConfig } from '../core/config.js';
+import { syncAgentConfig } from '../core/agent-config.js';
 import { refreshCompactContext } from '../core/compact.js';
 import { writeState, regenerateTasksMd } from '../core/tasks.js';
 import { projectPaths } from '../core/paths.js';
@@ -363,6 +364,14 @@ export async function writeImport(plan) {
     result.warnings.push(`Sync post-import falló: ${err.message}`);
   }
 
+  // Read the saved config, including when overwriteConfig=false preserved it.
+  try {
+    const native = await syncAgentConfig(plan.projectRoot);
+    result.createdFiles.push(...native.createdFiles);
+    result.warnings.push(...native.warnings);
+  } catch (err) {
+    result.warnings.push(`No pude autoconfigurar el CLI: ${err.message}`);
+  }
   return result;
 }
 
