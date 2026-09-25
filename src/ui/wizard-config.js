@@ -103,7 +103,8 @@ async function editProvider() {
   const cur = await readAllConfig();
   const provider = await pickProvider({
     message: 'Provider por defecto (Esc para volver)',
-    initialValue: cur.defaultProvider?.provider ?? 'ollama-cloud',
+    initialValue: cur.defaultProvider?.provider ?? null,
+    suggestFor: cur.defaultAgent ?? 'claude-code',
   });
   if (!provider) return;
   const model = await pickModel(provider, {

@@ -169,6 +169,29 @@ export function resolveLaunchModel(model, agentId) {
 }
 
 /**
+ * Provider to pre-select for an agent.
+ *
+ * Keeps `preferred` (the user's default or current choice) when it can
+ * work: compatible with the agent and, for Ollama providers, only if
+ * Ollama is available. Otherwise falls back to the agent's own `via-*`
+ * provider (the CLI uses the models the user already configured in it),
+ * which needs no extra install or API key.
+ *
+ * @param {{agentId?: string|null, preferred?: string|null, ollamaAvailable: boolean}} input
+ * @returns {string}
+ */
+export function suggestProvider({ agentId, preferred, ollamaAvailable }) {
+  const needsOllama = (p) => p === 'ollama-cloud' || p === 'ollama-local';
+  const agent = agentId ? getAgent(agentId) : null;
+  if (preferred && (!agentId || isProviderCompatible(preferred, agentId)) &&
+      (ollamaAvailable || !needsOllama(preferred))) {
+    return preferred;
+  }
+  if (agent) return agent.nativeProvider;
+  return ollamaAvailable ? 'ollama-cloud' : 'claude';
+}
+
+/**
  * Project-relative path of the instructions file storm writes for an
  * agent. Unknown agents get a generic AGENTS.md at the root.
  *

@@ -216,3 +216,15 @@ test('resolveLaunch: uses the resolved model over the stored one', () => {
   const r = resolveLaunch({ config, modelName: 'kimi-k2.6:cloud' });
   assert.deepEqual(r.args, ['--model', 'kimi-k2.6:cloud']);
 });
+
+test('createProject: without a global default, uses the agent own via-* provider', { skip }, async () => {
+  await resetGlobal();
+  await withProject({ agent: 'opencode' }, async (root) => {
+    assert.equal((await getProjectSettings(root)).provider, 'via-opencode');
+    const native = JSON.parse(await readFile(path.join(root, 'opencode.json'), 'utf8'));
+    assert.equal(native.model, undefined, 'OpenCode keeps its own model choice');
+  });
+  await withProject({ agent: 'claude-code' }, async (root) => {
+    assert.equal((await getProjectSettings(root)).provider, 'via-claude-code');
+  });
+});

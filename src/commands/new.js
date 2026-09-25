@@ -221,7 +221,11 @@ export async function resolveNewProjectModel(model, agentId) {
   // An Ollama default without a model is fine: agent-config picks an
   // installed/recommended one when the project is prepared.
   const def = await getDefaultProvider();
-  const base = def ? { provider: def.provider, name: def.model } : { provider: 'claude', name: null };
+  // No default: the agent's own via-* provider (uses the models already
+  // configured in the CLI; needs no API key or Ollama).
+  const base = def
+    ? { provider: def.provider, name: def.model }
+    : { provider: getAgent(agentId)?.nativeProvider ?? 'claude', name: null };
   return resolveLaunchModel(base, agentId).model;
 }
 
