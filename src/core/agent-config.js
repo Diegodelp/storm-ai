@@ -1,6 +1,5 @@
 /** Project-local runtime configuration for the CLI selected in project.config.json. */
 import { readFile, mkdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parse, modify, applyEdits } from 'jsonc-parser';
@@ -51,23 +50,6 @@ function edit(doc, keys, value) {
   }
 }
 
-async function inheritedModel(agent, projectRoot, local) {
-  if (agent === 'claude-code' && process.env.ANTHROPIC_MODEL?.trim()) return process.env.ANTHROPIC_MODEL.trim();
-  if (typeof local.model === 'string' && local.model.trim()) return local.model;
-  const candidates = agent === 'claude-code'
-    ? [path.join(projectRoot, '.claude/settings.json'), path.join(process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), '.claude'), 'settings.json')]
-    : [process.env.OPENCODE_CONFIG, ...['opencode.jsonc', 'opencode.json'].map((name) =>
-      path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'), 'opencode', name))];
-  if (agent === 'opencode' && process.env.OPENCODE_CONFIG_CONTENT) {
-    const model = parse(process.env.OPENCODE_CONFIG_CONTENT)?.model;
-    if (typeof model === 'string' && model.trim()) return model;
-  }
-  for (const file of candidates.filter(Boolean)) {
-    const { data } = await readDocument(file);
-    if (typeof data.model === 'string' && data.model.trim()) return data.model;
-  }
-  return null;
-}
 
 /**
  * Merge generated routing/model fields into native CLI config. The state file
@@ -138,9 +120,12 @@ export async function configureAgentForProject({ projectRoot, config, strict = f
     selected ||= process.env.ANTHROPIC_MODEL?.trim() || 'claude-sonnet-4-5';
     selected = selected.replace(/^anthropic\//, '');
   } else if (provider === 'via-claude-code' || provider === 'via-opencode') {
-    // A model configured in one CLI is not automatically usable in the other.
-    const sourceAgent = provider === 'via-opencode' ? 'opencode' : 'claude-code';
-    selected = (sourceAgent === agent ? selected : null) || await inheritedModel(agent, projectRoot, doc.data);
+    // Delegated: the CLI picks its own model at run time. Copying its
+    // current default into the project would freeze it (later changes in
+    // the CLI are ignored) and break other machines where that model or
+    // provider isn't available (e.g. an opencode.json shared through git).
+    // A model the user wrote in the project config is left untouched.
+    selected = null;
   } else {
     throw new Error(`Provider desconocido: ${provider}`);
   }

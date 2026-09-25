@@ -157,20 +157,35 @@ test('switching agents cleans previous generated settings but retains manual edi
   assert.equal((await json(root, 'opencode.json')).model, 'ollama/qwen3.5:9b');
 });
 
-test('delegated OpenCode uses the native model without copying global credentials', async (t) => {
+test('delegated OpenCode never copies the global model (or credentials) into the project', async (t) => {
   const root = await fixture(t);
   const native = path.join(root, 'global.json');
-  await writeFile(native, JSON.stringify({ model: 'vendor/custom-model', provider: { vendor: { options: { apiKey: 'secret-fixture' } } } }));
+  await writeFile(native, JSON.stringify({ model: 'nvidia/z-ai/glm-4.7', provider: { vendor: { options: { apiKey: 'secret-fixture' } } } }));
   const old = process.env.OPENCODE_CONFIG;
   process.env.OPENCODE_CONFIG = native;
   t.after(() => { if (old === undefined) delete process.env.OPENCODE_CONFIG; else process.env.OPENCODE_CONFIG = old; });
   const config = configFor('opencode', 'via-opencode');
   const result = await configureAgentForProject({ projectRoot: root, config }, deps);
-  assert.equal(result.modelName, 'vendor/custom-model');
-  assert.equal((await json(root, 'opencode.json')).model, 'vendor/custom-model');
+  // OpenCode resolves its own model at run time; nothing is frozen in the project.
+  assert.equal(result.modelName, null);
+  assert.equal((await json(root, 'opencode.json')).model, undefined);
   assert.equal(config.model.name, null);
   assert.doesNotMatch(await readFile(path.join(root, '.storm/agent-config.json'), 'utf8'), /secret-fixture/);
   assert.doesNotMatch(await readFile(path.join(root, 'opencode.json'), 'utf8'), /secret-fixture/);
+});
+
+test('delegated: a model storm copied in older versions is removed on the next sync', async (t) => {
+  const root = await fixture(t);
+  await writeFile(path.join(root, 'opencode.json'), JSON.stringify({ model: 'nvidia/z-ai/glm-4.7', theme: 'dark' }));
+  await mkdir(path.join(root, '.storm'), { recursive: true });
+  await writeFile(path.join(root, '.storm/agent-config.json'), JSON.stringify({
+    version: 1, provider: 'via-opencode', modelName: 'nvidia/z-ai/glm-4.7',
+    files: { 'opencode.json': [{ path: ['model'], value: 'nvidia/z-ai/glm-4.7' }] },
+  }));
+  await configureAgentForProject({ projectRoot: root, config: configFor('opencode', 'via-opencode') }, deps);
+  const settings = await json(root, 'opencode.json');
+  assert.equal(settings.model, undefined);
+  assert.equal(settings.theme, 'dark', 'unrelated settings are kept');
 });
 
 test('invalid native JSONC is never overwritten', async (t) => {
@@ -188,7 +203,7 @@ test('delegation keeps a project-owned model across repeated syncs', async (t) =
   const config = configFor('opencode', 'via-opencode');
   for (let i = 0; i < 3; i++) {
     const result = await configureAgentForProject({ projectRoot: root, config }, deps);
-    assert.equal(result.modelName, 'provider/project-model');
+    assert.equal(result.modelName, null, 'no --model: OpenCode reads the project model itself');
     assert.equal((await json(root, 'opencode.json')).model, 'provider/project-model');
   }
 });
