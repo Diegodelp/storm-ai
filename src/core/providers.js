@@ -1,8 +1,9 @@
 /**
  * Model provider catalog, validation, detection and model listing.
  *
- * See PROVIDERS below for the list. Which providers can launch which
- * coding agent is declared in src/core/agents.js (launchTemplates).
+ * The catalog covers direct Anthropic/Ollama access and CLI delegation.
+ * Ollama models can be local (detected via `ollama list`) or cloud
+ * (curated shortlist, resolved server-side by Ollama).
  *
  * Design choices:
  *   - We never HTTP to ollama.com to list cloud models. The catalog changes
@@ -14,6 +15,7 @@
 
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { getOllamaHost } from './global-config.js';
 
 const execAsync = promisify(exec);
 const OLLAMA_LIST_TIMEOUT_MS = 5000;
@@ -97,7 +99,7 @@ export function providerNeedsModel(id) {
  * @returns {boolean}
  */
 export function isCloudModelName(name) {
-  return /[:-]cloud$/.test(String(name ?? '').trim());
+  return isCloudModel(String(name ?? '').trim());
 }
 
 /**
@@ -231,11 +233,45 @@ export async function detectOllama() {
  *
  * @returns {Promise<LocalModel[]>}
  */
-export async function listOllamaModels() {
+export function isCloudModel(model) {
+  const name = typeof model === 'string' ? model : model.name;
+  return Boolean(typeof model === 'object' && model.remoteHost) || /(?:^|[-:])cloud(?:$|:)/i.test(name);
+}
+
+/** Prefer an installed recommendation, then use a stable installed fallback. */
+export function chooseInstalledModel(models, provider) {
+  const candidates = models.filter((m) => isCloudModel(m) === (provider === 'ollama-cloud'));
+  const preferred = provider === 'ollama-cloud' ? CLOUD_MODELS : LOCAL_RECOMMENDED;
+  for (const entry of preferred) {
+    const match = candidates.find((m) => m.name === entry.name || m.name === `${entry.name}:latest`);
+    if (match) return match.name;
+  }
+  return [...candidates].sort((a, b) => a.name.localeCompare(b.name))[0]?.name ?? null;
+}
+
+export async function listOllamaModels({ includeCloud = false } = {}) {
+  const host = await getOllamaHost();
+  const filter = (models) => includeCloud ? models : models.filter((m) => !isCloudModel(m));
+  // Works against remote daemons too, without requiring an Ollama binary.
+  try {
+    const res = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error(`Ollama: ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data.models)) throw new Error('Invalid Ollama model list');
+    return filter(data.models.filter((m) => typeof m?.name === 'string' && m.name.trim()).map((m) => ({
+      name: m.name,
+      size: typeof m.size === 'number' ? `${(m.size / 1e9).toFixed(1)} GB` : null,
+      modified: m.modified_at ?? null,
+      remoteHost: m.remote_host ?? null,
+    })));
+  } catch {
+    // Older daemons/proxies: fall back to the installed CLI.
+  }
   try {
     const { stdout } = await execAsync('ollama list', {
       timeout: OLLAMA_LIST_TIMEOUT_MS,
       windowsHide: true,
+      env: { ...process.env, OLLAMA_HOST: host },
     });
     const lines = stdout.split(/\r?\n/).map((l) => l.trimEnd());
     if (lines.length === 0) return [];
@@ -245,17 +281,17 @@ export async function listOllamaModels() {
 
     const models = [];
     for (const line of body) {
-      if (!line.trim()) continue;
+      if (!line.trim() || /^\s*NAME\s+/i.test(line)) continue;
       // Split on whitespace runs of 2+ to preserve "2 days ago" as one cell.
       const cells = line.split(/\s{2,}/).map((c) => c.trim()).filter(Boolean);
-      if (cells.length === 0) continue;
+      if (cells.length < 2) continue;
       models.push({
         name: cells[0],
         size: cells[2] || null,
         modified: cells[3] || null,
       });
     }
-    return models;
+    return filter(models);
   } catch {
     return [];
   }
@@ -349,10 +385,12 @@ export async function installOllama(platform) {
  * @returns {Promise<{ok: boolean, message?: string}>}
  */
 export async function pullOllamaModel(modelName) {
+  const env = { ...process.env, OLLAMA_HOST: await getOllamaHost() };
   return new Promise((resolve) => {
     const proc = spawn('ollama', ['pull', modelName], {
       stdio: 'inherit',
       windowsHide: true,
+      env,
     });
     proc.on('exit', (code) => {
       if (code === 0) resolve({ ok: true });

@@ -7,7 +7,7 @@
  *   - default agent (Claude Code, OpenCode, ...) for NEW projects
  *   - default custom launch command for NEW projects, and the fallback
  *     for projects whose agent storm doesn't know
- *   - OLLAMA_HOST (used by `storm import` and passed to `ollama launch`;
+ *   - OLLAMA_HOST (used by `storm import`, model listing and launch;
  *     the OLLAMA_HOST env var wins over it)
  *
  * Existing projects are NOT affected by changes here: each one keeps its
@@ -154,9 +154,14 @@ export async function setDefaultLaunchCommand(cmd) {
  * @returns {Promise<string>}
  */
 export async function getOllamaHost() {
-  if (process.env.OLLAMA_HOST) return process.env.OLLAMA_HOST;
   const cfg = await readGlobalConfig();
-  return cfg.ollamaHost ?? 'http://127.0.0.1:11434';
+  const host = process.env.OLLAMA_HOST?.trim() || cfg.ollamaHost?.trim() || 'http://127.0.0.1:11434';
+  // Ollama accepts host:port as well as a full URL. fetch requires a scheme.
+  const url = new URL(host.includes('://') ? host : `http://${host}`);
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('OLLAMA_HOST debe usar http o https.');
+  }
+  return url.toString().replace(/\/+$/, '');
 }
 
 /**

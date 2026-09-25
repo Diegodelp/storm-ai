@@ -28,6 +28,7 @@ import {
 } from '../core/templates.js';
 import { readConfig, writeConfig } from '../core/config.js';
 import { projectPaths, safeName, fileExists } from '../core/paths.js';
+import { syncAgentConfig } from '../core/agent-config.js';
 
 /**
  * @typedef {Object} TemplateApplyInput
@@ -38,6 +39,8 @@ import { projectPaths, safeName, fileExists } from '../core/paths.js';
  * @property {Record<string, string>} [variables]   Substitution map (excl. PROJECT_NAME).
  * @property {boolean} [skipPostInstall]      Skip running postInstall commands.
  * @property {boolean} [force]                Overwrite if the target dir exists.
+ * @property {{provider:string,name:string|null}} [model] Provider/model override.
+ * @property {string} [agent]                Selected CLI override.
  */
 
 /**
@@ -130,7 +133,7 @@ export async function applyTemplateToProject(input) {
 
   // Patch project.config.json: replace name with the user's input,
   // ensure model field exists if not in the template.
-  await patchProjectConfig(projectRoot, slug, input.metadata, warnings);
+  await patchProjectConfig(projectRoot, slug, input.metadata, warnings, input);
 
   // Patch task-state.json with initialTasks from metadata.
   await patchTaskState(projectRoot, slug, input.metadata.initialTasks ?? [], warnings);
@@ -150,11 +153,21 @@ export async function applyTemplateToProject(input) {
     }
   }
 
+  let nativeFiles = 0;
+  if (await fileExists(path.join(projectRoot, 'project.config.json'))) {
+    try {
+      const native = await syncAgentConfig(projectRoot);
+      nativeFiles = native.createdFiles.length;
+      warnings.push(...native.warnings);
+    } catch (err) {
+      warnings.push(`No pude autoconfigurar el CLI: ${err.message}`);
+    }
+  }
   return {
     projectRoot,
     safeName: slug,
     metadata: input.metadata,
-    filesWritten: apply.filesWritten,
+    filesWritten: apply.filesWritten + nativeFiles,
     filesSkipped: apply.filesSkipped,
     warnings,
     postInstall,
@@ -165,7 +178,7 @@ export async function applyTemplateToProject(input) {
 // Internals
 // ---------------------------------------------------------------------------
 
-async function patchProjectConfig(projectRoot, slug, metadata, warnings) {
+async function patchProjectConfig(projectRoot, slug, metadata, warnings, input) {
   const configPath = path.join(projectRoot, 'project.config.json');
   if (!(await pathExists(configPath))) {
     warnings.push(
@@ -178,6 +191,8 @@ async function patchProjectConfig(projectRoot, slug, metadata, warnings) {
   try {
     const config = await readConfig(projectRoot);
     config.name = slug;
+    if (input.model) config.model = input.model;
+    if (input.agent) config.agent = input.agent;
     if (!config.stackId && metadata.stackId) config.stackId = metadata.stackId;
     if (!config.databaseId && metadata.databaseId) config.databaseId = metadata.databaseId;
     await writeConfig(projectRoot, config);

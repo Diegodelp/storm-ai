@@ -42,7 +42,8 @@ import {
   resolveLaunchModel,
   getCompatibleProviders,
 } from '../core/agents.js';
-import { validateProviderModel, providerNeedsModel } from '../core/providers.js';
+import { validateProviderModel } from '../core/providers.js';
+import { syncAgentConfig } from '../core/agent-config.js';
 import {
   BUILTIN_OPENCODE_COMMANDS,
   BUILTIN_OPENCODE_AGENTS,
@@ -178,6 +179,14 @@ export async function createProject(input) {
     );
   }
 
+  try {
+    const native = await syncAgentConfig(projectRoot);
+    createdFiles.push(...native.createdFiles);
+    warnings.push(...native.warnings);
+  } catch (err) {
+    warnings.push(`No pude autoconfigurar el CLI: ${err.message}`);
+  }
+
   return {
     projectRoot,
     safeName: slug,
@@ -209,11 +218,10 @@ export async function resolveNewProjectModel(model, agentId) {
     }
     return { provider: model.provider, name: model.name ?? null };
   }
+  // An Ollama default without a model is fine: agent-config picks an
+  // installed/recommended one when the project is prepared.
   const def = await getDefaultProvider();
-  // A default without its required model (e.g. `storm config set provider
-  // ollama-cloud` alone) can't launch anything: ignore it.
-  const usable = def && !(providerNeedsModel(def.provider) && !def.model);
-  const base = usable ? { provider: def.provider, name: def.model } : { provider: 'claude', name: null };
+  const base = def ? { provider: def.provider, name: def.model } : { provider: 'claude', name: null };
   return resolveLaunchModel(base, agentId).model;
 }
 

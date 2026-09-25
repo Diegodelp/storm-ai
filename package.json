@@ -1,6 +1,6 @@
 {
   "name": "storm-ai",
-  "version": "0.4.5",
+  "version": "0.6.0",
   "description": "Context-aware project scaffolding for AI coding agents (Claude Code + Ollama).",
   "type": "module",
   "bin": {
@@ -47,6 +47,7 @@
     "@babel/traverse": "^7.25.0",
     "@clack/prompts": "^0.7.0",
     "commander": "^12.1.0",
+    "jsonc-parser": "^3.3.1",
     "sharp": "^0.33.5",
     "string-width": "^8.2.0"
   }

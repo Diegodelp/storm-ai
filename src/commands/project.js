@@ -9,7 +9,8 @@
  * Keys:
  *   - provider        any id from PROVIDERS, compatible with the agent.
  *                     Changing it clears the model.
- *   - model           only for providers that take one (ollama-*).
+ *   - model           only for providers that take one (ollama-*). Empty =
+ *                     automatic (agent-config picks an installed one).
  *   - agent           claude-code | opencode | <custom>. Changing it
  *                     writes the new agent's scaffolding (CLAUDE.md or
  *                     AGENTS.md, commands, ...) and, if the current
@@ -17,6 +18,9 @@
  *                     agent's native provider.
  *   - launchCommand   custom shell command ({{model}} placeholder).
  *                     Overrides the agent's launch template.
+ *
+ * Every change re-syncs the agent's native project config
+ * (.claude/settings.local.json / opencode.json, see core/agent-config.js).
  */
 
 import { readConfig, writeConfig } from '../core/config.js';
@@ -28,7 +32,8 @@ import {
   getInstructionsFile,
   agentLabel,
 } from '../core/agents.js';
-import { validateProviderModel, providerNeedsModel } from '../core/providers.js';
+import { validateProviderModel } from '../core/providers.js';
+import { syncAgentConfig } from '../core/agent-config.js';
 import { writeAgentScaffold } from './new.js';
 
 export const PROJECT_KEYS = Object.freeze(['provider', 'model', 'agent', 'launchCommand']);
@@ -79,10 +84,6 @@ export function validateProjectSettings(s) {
     if (!isProviderCompatible(s.provider, s.agent)) {
       return `${agentLabel(s.agent)} no se puede lanzar con "${s.provider}". ` +
         `Compatibles: ${getCompatibleProviders(s.agent).join(', ')}.`;
-    }
-    if (providerNeedsModel(s.provider) && !s.model) {
-      return `El provider "${s.provider}" necesita un modelo ` +
-        `(storm project set provider ${s.provider} --model <nombre>).`;
     }
   }
   return null;
@@ -154,6 +155,19 @@ export async function updateProjectSettings(projectRoot, patch) {
     if (oldFile !== getInstructionsFile(next.agent)) {
       notes.push(`${oldFile} (del agent anterior) quedó en el proyecto; borralo si ya no lo usás.`);
     }
+  }
+
+  // Native CLI config follows the new settings (may also fill in an
+  // automatic Ollama model, which we report back).
+  try {
+    const native = await syncAgentConfig(projectRoot);
+    notes.push(...native.warnings);
+    if (!next.model && native.modelName && (next.provider === 'ollama-cloud' || next.provider === 'ollama-local')) {
+      notes.push(`Modelo elegido automáticamente: ${native.modelName}.`);
+      next.model = native.modelName;
+    }
+  } catch (err) {
+    notes.push(`No pude actualizar la config nativa del CLI: ${err.message}`);
   }
 
   return { before, after: next, scaffold, notes };

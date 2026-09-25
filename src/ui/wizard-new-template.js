@@ -188,6 +188,9 @@ export async function runNewFromTemplateWizard({ cwd, templateId = null, name = 
         cloneDir: cloneResult.cloneDir,
         metadata: meta,
         variables,
+        // agent/provider/model are applied below with updateProjectSettings,
+        // which also writes the chosen agent's scaffolding if the template
+        // shipped another one.
       });
       applySpinner.stop('Template aplicado');
     } catch (err) {

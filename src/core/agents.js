@@ -7,12 +7,16 @@
  * local). The two combine like a matrix:
  *
  *                  Ollama cloud  Ollama local  Claude API  via-claude-code  via-opencode
- *   Claude Code    OK            OK            OK          OK               -
- *   OpenCode       OK            OK            OK          -                OK
+ *   Claude Code    OK            OK            OK          OK               OK
+ *   OpenCode       OK            OK            OK          OK               OK
  *   <custom>       user-defined launch command (any provider)
  *
- * The `via-*` providers mean "the agent CLI uses whatever model it has
- * configured itself", so each one only makes sense with its own CLI.
+ * Storm writes the project-local native config of the agent (see
+ * core/agent-config.js), so every provider can drive both CLIs.
+ * The via-* providers choose the CLI for import analysis. Interactive launch
+ * uses the independently selected agent and that agent's own configuration.
+ * The compatibility helpers below still read launchTemplates, so an agent
+ * added with fewer templates is filtered automatically.
  *
  * Each agent declares:
  *   - id, label, hint     (for the wizard)
@@ -64,14 +68,14 @@ export const AGENTS = [
   {
     id: 'claude-code',
     label: 'Claude Code',
-    hint: 'CLI oficial de Anthropic. Soporta Ollama cloud/local vía `ollama launch claude`.',
+    hint: 'CLI oficial de Anthropic. Storm configura Anthropic u Ollama por proyecto.',
     detectCommand: 'claude --version',
     launchTemplates: {
-      'ollama-cloud': { command: 'ollama', args: ['launch', 'claude', '--model', '{{model}}'] },
-      'ollama-local': { command: 'ollama', args: ['launch', 'claude', '--model', '{{model}}'] },
+      'ollama-cloud': { command: 'claude', args: [] },
+      'ollama-local': { command: 'claude', args: [] },
       'claude':       { command: 'claude', args: [] },
-      // Claude Code with its own config (subscription, API key, etc).
       'via-claude-code': { command: 'claude', args: [] },
+      'via-opencode':    { command: 'claude', args: [] },
     },
     nativeProvider: 'via-claude-code',
     instructionsFile: 'CLAUDE.md',
@@ -90,16 +94,16 @@ export const AGENTS = [
   {
     id: 'opencode',
     label: 'OpenCode',
-    hint: 'CLI open-source. Soporta Ollama cloud/local vía `ollama launch opencode`.',
+    hint: 'CLI open-source. Storm configura el provider y los modelos por proyecto.',
     detectCommand: 'opencode --version',
     launchTemplates: {
-      'ollama-cloud': { command: 'ollama', args: ['launch', 'opencode', '--model', '{{model}}'] },
-      'ollama-local': { command: 'ollama', args: ['launch', 'opencode', '--model', '{{model}}'] },
+      'ollama-cloud': { command: 'opencode', args: [] },
+      'ollama-local': { command: 'opencode', args: [] },
       // OpenCode standalone reads config from ~/.config/opencode/opencode.json
       // and can use Anthropic via that config. We just spawn the binary.
       'claude':       { command: 'opencode', args: [] },
-      // OpenCode with its own config (ChatGPT, Gemini, Anthropic, ...).
-      'via-opencode': { command: 'opencode', args: [] },
+      'via-claude-code': { command: 'opencode', args: [] },
+      'via-opencode':    { command: 'opencode', args: [] },
     },
     nativeProvider: 'via-opencode',
     // OpenCode walks up from the cwd looking for AGENTS.md; it does NOT
@@ -272,6 +276,15 @@ export function buildAgentLaunchCommand({ provider, agentId = 'claude-code', mod
   }
 
   const args = tmpl.args.map((a) => substituteModel(a, modelName));
+  if (modelName) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/@+\[\]-]*$/.test(modelName)) {
+      throw new Error('Nombre de modelo inválido: usá el identificador del provider, sin espacios ni comandos de shell.');
+    }
+    const model = agentId === 'opencode' && provider.startsWith('ollama-') ? `ollama/${modelName}`
+      : agentId === 'opencode' && provider === 'claude' ? `anthropic/${modelName.replace(/^anthropic\//, '')}`
+      : modelName;
+    args.push('--model', model);
+  }
   return { command: tmpl.command, args };
 }
 

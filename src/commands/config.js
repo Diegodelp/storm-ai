@@ -128,8 +128,13 @@ export async function setConfigValue(key, value) {
       await setDefaultLaunchCommand(v || null);
       return;
     case 'ollamaHost':
-      if (v && !/^https?:\/\//.test(v)) {
-        throw new Error('ollamaHost debe empezar con http:// o https://');
+      if (v) {
+        // Same forms Ollama accepts: a full URL or host:port.
+        let url;
+        try { url = new URL(v.includes('://') ? v : `http://${v}`); } catch { url = null; }
+        if (!url || !['http:', 'https:'].includes(url.protocol)) {
+          throw new Error('ollamaHost debe ser una URL http(s) o host:puerto.');
+        }
       }
       await setOllamaHost(v || null);
       return;

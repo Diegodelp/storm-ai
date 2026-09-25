@@ -157,12 +157,13 @@ async function pickOllamaCloudModel(initialValue) {
 async function pickOllamaLocalModel(initialValue, offerPull) {
   const ollama = await detectOllama();
   if (!ollama.installed) {
-    clack.log.warn('Ollama no está instalado. Vas a tener que instalarlo antes de abrir el proyecto.');
+    clack.log.info('Ollama CLI no está instalado. Buscando modelos en el daemon configurado en OLLAMA_HOST.');
   }
 
   const spinner = clack.spinner();
   spinner.start('Buscando modelos Ollama locales');
-  const local = ollama.installed ? await listOllamaModels() : [];
+  // Queries the daemon over HTTP, so remote OLLAMA_HOSTs work without the CLI.
+  const local = await listOllamaModels();
   spinner.stop(`${local.length} modelo(s) local(es) detectado(s)`);
 
   const detectedNames = new Set(local.map((m) => m.name));
