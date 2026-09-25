@@ -28,11 +28,13 @@ import path from 'node:path';
 
 import { summarizeFile } from './parser.js';
 import { walkProject } from './walk.js';
+import { updateFunctionIndex } from './functions.js';
 
 const COMPACT_DIR = '.context-compact';
 const MAP_FILE = 'project-map.md';
 const UNASSIGNED_BRANCH = '_unassigned';
 const DEFAULT_MAP_FILES_PER_BRANCH = 10;
+const SECTION_LAYER_TITLE = { frontend: 'Frontend', backend: 'Backend', shared: 'Shared' };
 
 /**
  * @typedef {Object} BranchConfig
@@ -47,6 +49,9 @@ const DEFAULT_MAP_FILES_PER_BRANCH = 10;
  * @property {number} filesScanned
  * @property {number} unassignedCount
  * @property {string[]} warnings
+ * @property {{total: number, added: number, removed: number, classified: number,
+ *             pending: number, sections: number}} functions
+ *   Function index stats (see core/functions.js).
  */
 
 /**
@@ -59,6 +64,9 @@ const DEFAULT_MAP_FILES_PER_BRANCH = 10;
  * @param {import('./tasks.js').Task[]} [options.tasks]
  * @param {string[]} [options.ignoredPaths]   Extra dir basenames to skip
  *                                            (typically from compact_context.ignored_paths).
+ * @param {import('./functions.js').FunctionClassifier|null} [options.classifier]
+ *   LLM classifier for new/modified functions. Without it they get a
+ *   path-based classification and stay pending for the next LLM run.
  * @returns {Promise<RefreshResult>}
  */
 export async function refreshCompactContext(projectRoot, options) {
@@ -75,6 +83,14 @@ export async function refreshCompactContext(projectRoot, options) {
   const summaries = await Promise.all(
     walkResult.files.map((absPath) => summarizeFile(absPath, projectRoot)),
   );
+
+  // 1b. Function index: stable IDs + sections (frontend/backend/shared).
+  const fnIndex = await updateFunctionIndex(
+    projectRoot,
+    summaries.flatMap((sm) => sm.functions ?? []),
+    { classifier: options.classifier ?? null },
+  );
+  for (const w of fnIndex.warnings) warnings.push(w);
 
   // 2. Classify files into branches (most-specific wins).
   const branchPaths = branches.map((b) => normalizeBranchPath(b.path));
@@ -203,6 +219,8 @@ export async function refreshCompactContext(projectRoot, options) {
   // 6. Write the map.
   await writeProjectMap(projectRoot, {
     branchReports,
+    sections: fnIndex.sections,
+    pendingFunctions: fnIndex.pendingAfter,
     mapFilesPerBranch,
     activeTasksCount: tasks.filter((t) => t.status === 'in_progress').length,
   });
@@ -237,6 +255,14 @@ export async function refreshCompactContext(projectRoot, options) {
     filesScanned: summaries.length,
     unassignedCount: unassigned.length,
     warnings,
+    functions: {
+      total: fnIndex.registry.functions.length,
+      added: fnIndex.added,
+      removed: fnIndex.removed,
+      classified: fnIndex.classified,
+      pending: fnIndex.pendingAfter,
+      sections: fnIndex.sections.length,
+    },
   };
 }
 
@@ -543,6 +569,31 @@ async function writeProjectMap(projectRoot, data) {
     lines.push('');
   }
 
+  if (data.sections?.length) {
+    const total = data.sections.reduce((n, sec) => n + sec.functions.length, 0);
+    lines.push('## Sections (function index)');
+    lines.push('');
+    lines.push(
+      `_${total} function(s) with a stable \`#ID\`. Each section file lists ` +
+        'ID, signature, description and `file:lines`. Exact code: `storm functions show <ID>`._',
+    );
+    if (data.pendingFunctions > 0) {
+      lines.push(
+        `_${data.pendingFunctions} function(s) classified by path only (no AI yet): ` +
+          'run `storm refresh` with a provider configured._',
+      );
+    }
+    let currentLayer = null;
+    for (const sec of data.sections) {
+      if (sec.layer !== currentLayer) {
+        currentLayer = sec.layer;
+        lines.push('', `### ${SECTION_LAYER_TITLE[sec.layer] ?? sec.layer}`, '');
+      }
+      lines.push(`- **${sec.section}** (${sec.functions.length}) → \`${sec.file}\``);
+    }
+    lines.push('');
+  }
+
   lines.push('## How to use');
   lines.push('');
   lines.push('1. Read this map before starting any task.');
@@ -551,6 +602,10 @@ async function writeProjectMap(projectRoot, data) {
   );
   lines.push('3. Load only the `.md` of those branches, not the full directory.');
   lines.push('4. If you need more context, request additional branches explicitly.');
+  lines.push(
+    '5. To find a function, open its section file, pick the `#ID` and read only those lines ' +
+      '(or `storm functions show <ID>`).',
+  );
   lines.push('');
 
   await writeFile(
