@@ -274,6 +274,9 @@ export async function runImportWizard(input) {
       model: launchPick.model,
       agent: launchPick.agent,
       launch: launchPick.launchCommand ? { customCommand: launchPick.launchCommand } : {},
+      // Same provider as the analysis classifies every function into sections.
+      analysis: { provider: provider.provider, model: provider.model },
+      onFunctionProgress: (done, total) => applySpinner.message(`Clasificando funciones con IA: ${done}/${total}`),
       branches,
       skills,
       agents,
@@ -295,6 +298,12 @@ export async function runImportWizard(input) {
   }
   for (const w of result.warnings) {
     summary.push(`${ansi.yellow('⚠')} ${w}`);
+  }
+  if (result.functions) {
+    summary.push(
+      `${ansi.green('✓')} ${result.functions.total} función(es) con #ID en ` +
+        `${result.functions.sections} sección(es) → ${ansi.dim('.context-compact/sections/')}`,
+    );
   }
   summary.push(
     '',

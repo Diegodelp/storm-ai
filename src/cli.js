@@ -223,13 +223,29 @@ export async function runCli(argv) {
   // -------------------------------------------------------------------------
   program
     .command('refresh')
-    .description('Regenerate the .context-compact/ directory.')
-    .action(async () => {
-      const r = await refreshCmd({ cwd: process.cwd() });
+    .description('Regenerate .context-compact/ (branches + function index; the AI classifies only new/changed functions).')
+    .option('--no-llm', 'Do not call the AI: new functions are classified by path only.')
+    .action(async (opts) => {
+      const r = await refreshCmd({
+        cwd: process.cwd(),
+        llm: opts.llm !== false,
+        onProgress: (done, total) => {
+          if (process.stdout.isTTY) process.stdout.write(`\r  clasificando funciones con IA: ${done}/${total}   `);
+        },
+      });
+      if (process.stdout.isTTY) process.stdout.write('\r\x1b[K');
       console.log(
         ansi.green('✓') +
           ` refreshed ${r.branchesWritten} branch(es), ${r.filesScanned} file(s)`,
       );
+      const f = r.functions;
+      if (f) {
+        console.log(
+          `  ${f.total} función(es) en ${f.sections} sección(es)` +
+            ansi.dim(` (+${f.added} nuevas, -${f.removed} borradas, ${f.classified} clasificadas por IA` +
+              (f.pending ? `, ${f.pending} pendientes` : '') + ')'),
+        );
+      }
       if (r.unassignedCount > 0) {
         console.log(
           ansi.yellow('  ⚠') + ` ${r.unassignedCount} file(s) in _unassigned`,
@@ -342,6 +358,55 @@ export async function runCli(argv) {
       } catch (err) {
         console.error(ansi.red('error: ') + (err.message ?? String(err)));
         console.error(ansi.dim('To get just the path, use:  storm open ' + target + ' --print'));
+        process.exitCode = 1;
+      }
+    });
+
+  // -------------------------------------------------------------------------
+  // storm functions — function index (#ID → file:lines, by section)
+  // -------------------------------------------------------------------------
+  const fnCmd = program
+    .command('functions')
+    .description('Query the function index (IDs, sections). Updated by `storm refresh`.');
+
+  fnCmd
+    .command('show <id>')
+    .description('Print the exact code of one function: storm functions show ID-001')
+    .action(async (id) => {
+      try {
+        const { showFunction } = await import('./commands/functions.js');
+        const r = await showFunction({ cwd: process.cwd(), id });
+        const e = r.entry;
+        console.log(ansi.bold(`#${e.id} ${e.name}`) + ansi.dim(`  ${e.layer} · ${e.section}`));
+        console.log(ansi.dim(`${e.file}:${r.start}-${r.end}`) +
+          (r.moved ? ansi.yellow('  (líneas actualizadas; corré `storm refresh`)') : ''));
+        if (e.description) console.log(ansi.dim(e.description));
+        console.log('');
+        console.log(r.code);
+      } catch (err) {
+        console.error(ansi.red('error: ') + err.message);
+        process.exitCode = 1;
+      }
+    });
+
+  fnCmd
+    .command('list [filter]')
+    .description('List functions, optionally filtered by text (layer, section, name, file).')
+    .action(async (filter) => {
+      try {
+        const { listFunctions } = await import('./commands/functions.js');
+        const fns = await listFunctions({ cwd: process.cwd(), filter });
+        if (fns.length === 0) {
+          console.log(ansi.dim('Sin funciones. Corré `storm refresh` para generar el índice.'));
+          return;
+        }
+        for (const f of fns) {
+          const desc = f.description ? ansi.dim(` — ${f.description}`) : '';
+          console.log(`${ansi.cyan('#' + f.id)} ${f.name}${desc}  ${ansi.dim(`${f.layer}/${f.section} · ${f.file}:${f.start}`)}`);
+        }
+        console.log(ansi.dim(`\n${fns.length} función(es).`));
+      } catch (err) {
+        console.error(ansi.red('error: ') + err.message);
         process.exitCode = 1;
       }
     });

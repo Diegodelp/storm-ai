@@ -5,6 +5,8 @@
  *   - Public exports (named, default, re-exports, type-only)
  *   - Leading description (first comment block at top of file)
  *   - Imports grouped by source (used later for inter-branch dependencies)
+ *   - Functions with their line ranges (for the function index, see
+ *     core/functions.js)
  *
  * Non-goals:
  *   - Type inference, call graph analysis, dead code detection.
@@ -21,6 +23,8 @@ import path from 'node:path';
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 
+import { extractFunctions } from './functions.js';
+
 // @babel/traverse is a CJS module; its default export lives under .default
 // when imported from ESM.
 const traverse = _traverse.default ?? _traverse;
@@ -32,6 +36,7 @@ const traverse = _traverse.default ?? _traverse;
  * @property {string|null} description        First comment-line or null.
  * @property {string[]} exports               Public export names. 'default' is used for default exports.
  * @property {Array<{source: string, names: string[]}>} imports
+ * @property {import('./functions.js').ExtractedFunction[]} functions
  * @property {string|null} parseError         Error message if parsing failed.
  * @property {boolean} supported              true for JS/TS; false for other languages.
  */
@@ -65,6 +70,7 @@ export async function summarizeFile(absolutePath, projectRoot) {
     description: null,
     exports: [],
     imports: [],
+    functions: [],
     parseError: null,
     supported: SUPPORTED_EXTS.has(ext),
   };
@@ -110,7 +116,38 @@ export async function summarizeFile(absolutePath, projectRoot) {
     description: extractLeadingComment(ast, source),
     exports: extractExports(ast),
     imports: extractImports(ast),
+    functions: safeExtractFunctions(ast, source, relativePath, ext),
   };
+}
+
+/** A bug in function extraction must never break the whole refresh. */
+function safeExtractFunctions(ast, source, relativePath, ext) {
+  try {
+    return extractFunctions(ast, source, relativePath, { jsx: JSX_EXTS.has(ext) });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Parse a JS/TS source with the same options the refresh uses.
+ * Returns null for unsupported extensions or unparseable code.
+ *
+ * @param {string} source
+ * @param {string} fileName   Used only for its extension.
+ */
+export function parseSource(source, fileName) {
+  const ext = path.extname(fileName).toLowerCase();
+  if (!SUPPORTED_EXTS.has(ext)) return null;
+  try {
+    return parse(source, {
+      sourceType: 'module',
+      errorRecovery: true,
+      plugins: buildPluginList(ext),
+    });
+  } catch {
+    return null;
+  }
 }
 
 /**

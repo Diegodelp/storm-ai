@@ -169,6 +169,11 @@ your-project/
 │   ├── pages.md                          # per-branch summary
 │   ├── pages-api.md
 │   ├── components.md
+│   ├── functions.json                    # function index: #ID → file:lines
+│   ├── sections/                         # functions grouped by section
+│   │   ├── frontend/pacientes.md
+│   │   ├── backend/pacientes.md
+│   │   └── shared/utilidades.md
 │   └── task-state.json
 └── .claude/                              # only if agent=claude-code
     ├── commands/                         # slash commands
@@ -179,6 +184,46 @@ your-project/
 The agent reads `project-map.md` (always fits in context) and the specific
 `.context-compact/<branch>.md` files relevant to the current task. Source
 files are only opened when the summaries aren't enough.
+
+### Function index (#IDs by section)
+
+Every function of the app (JS/TS) gets a stable ID and is grouped by
+section, so the agent can jump to the exact lines it needs instead of
+reading whole files:
+
+```markdown
+# Backend · Pacientes
+
+## `pages/api/pacientes/index.js`
+
+- **#ID-003** `async handler(req, res)` — Devuelve los pacientes activos · L2-4
+- **#ID-004** `async listarPacientes()` — Trae los pacientes de la base · L5-9 _(internal)_
+```
+
+- **What's indexed:** named functions, arrow functions assigned to a
+  variable, `export default` functions, React components and hooks, class
+  methods and methods of top-level objects. Inline callbacks
+  (`.map(x => ...)`) are not.
+- **The source code is never modified.** IDs live in
+  `.context-compact/functions.json`. They stay the same when a function
+  changes, moves within a file, or moves to another file with the same
+  body, and are never reused.
+- **Sections:** the AI assigns each function to `frontend`, `backend` or
+  `shared`, groups it by business area (Pacientes, Turnos, Facturación...),
+  and writes a one-line description. `storm import` uses the analysis
+  provider; `storm refresh` uses the default provider.
+- **Cost:** only new or modified functions are sent to the AI, in batches.
+  Unchanged ones reuse the saved classification, so a refresh with no code
+  changes makes no AI calls. `storm sync` / `storm task done` never call
+  the AI: new functions are classified by path and picked up by the next
+  `storm refresh`. Use `storm refresh --no-llm` to skip the AI once.
+- **Notes:** a `## Notes` block you write in a section file is kept when
+  storm regenerates it.
+
+```bash
+storm functions list pacientes      # search by name, section, file...
+storm functions show ID-003         # exact code of one function (also: 3, #ID-003)
+```
 
 ## Configuration
 
@@ -288,6 +333,10 @@ storm open my-app                   # launch the project's agent there
 storm open my-app --print           # only print the path (for shell snippets)
 storm launch                        # launch in the current dir
 storm project                       # change this project's agent/provider/model
+
+# Function index
+storm functions list [text]         # all functions with #ID, section and location
+storm functions show <ID>           # exact code of one function
 ```
 
 ### Debugging parse failures
