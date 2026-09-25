@@ -1,14 +1,18 @@
 /**
- * Selector interactivo de proyectos + auto-launch.
+ * Selector interactivo de proyectos.
  *
- * Escanea las carpetas por defecto, deja al usuario elegir, y abre
- * Claude Code con el provider/modelo del proyecto.
+ * Escanea las carpetas por defecto, deja al usuario elegir, muestra con
+ * qué agent/provider/modelo se va a abrir y permite abrirlo o cambiar
+ * esa configuración (que es del proyecto, no global).
  */
 
 import * as clack from '@clack/prompts';
 
 import { discover } from '../commands/open.js';
 import { launchForProject } from '../commands/launch.js';
+import { getProjectSettings } from '../commands/project.js';
+import { agentLabel } from '../core/agents.js';
+import { runProjectSettingsWizard, describeProjectSettings } from './wizard-project.js';
 import * as ansi from './ansi.js';
 
 export async function runOpenWizard() {
@@ -42,17 +46,42 @@ export async function runOpenWizard() {
   }
 
   const picked = found.find((p) => p.root === choice);
-  clack.note(
-    `${ansi.bold(picked.name)}\n${ansi.dim(picked.root)}\n\nAbriendo Claude Code...`,
-    'Seleccionado',
-  );
 
-  try {
-    await launchForProject({ projectRoot: picked.root });
-  } catch (err) {
-    clack.log.error(
-      `No pude abrir: ${err.message}\n` +
-        `Abrilo a mano:\n  cd "${picked.root}"\n  claude`,
+  while (true) {
+    let settings;
+    try {
+      settings = await getProjectSettings(picked.root);
+    } catch (err) {
+      clack.log.error(`No pude leer project.config.json: ${err.message}`);
+      return;
+    }
+    clack.note(
+      `${ansi.bold(picked.name)}\n${ansi.dim(picked.root)}\n\n${describeProjectSettings(settings)}`,
+      'Seleccionado',
     );
+
+    const action = await clack.select({
+      message: '¿Qué hacemos?',
+      options: [
+        { value: 'open', label: `Abrir con ${agentLabel(settings.agent)}` },
+        { value: 'settings', label: 'Cambiar agent / provider / modelo de este proyecto' },
+        { value: 'back', label: '← Volver' },
+      ],
+    });
+    if (clack.isCancel(action) || action === 'back') return;
+
+    if (action === 'settings') {
+      await runProjectSettingsWizard({ projectRoot: picked.root });
+      continue;
+    }
+
+    clack.log.info(`Abriendo ${agentLabel(settings.agent)}...`);
+    try {
+      await launchForProject({ projectRoot: picked.root });
+      return;
+    } catch (err) {
+      clack.log.error(`No pude abrir: ${err.message}`);
+      // Loop back so the user can fix the settings right here.
+    }
   }
 }

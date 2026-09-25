@@ -65,12 +65,16 @@ export async function runCli(argv) {
     .option('-s, --stack <text>', 'Stack (e.g. "Next.js + Prisma")')
     .option('--db <text>', 'Database description')
     .option('--template <id>', 'Use a template from the registry')
+    .option('--agent <id>', 'Agent (CLI): claude-code | opencode | <custom>. Default: storm config.')
+    .option('--provider <id>', 'Provider to launch the agent with. Default: storm config (if compatible).')
+    .option('--model <name>', 'Model for ollama-* providers (e.g. kimi-k2.6:cloud).')
+    .option('--launch-command <cmd>', 'Custom launch command ({{model}} placeholder). Required for custom agents.')
     .option('--force', 'Overwrite if the directory exists')
     .action(async (name, opts) => {
       if (opts.template) {
         // Direct template flow with optional name.
-        const { runNewFromTemplateWizardDirect } = await import('./ui/wizard-new-template-direct.js');
-        await runNewFromTemplateWizardDirect({
+        const { runNewFromTemplateWizard } = await import('./ui/wizard-new-template.js');
+        await runNewFromTemplateWizard({
           cwd: process.cwd(),
           templateId: opts.template,
           name: name || null,
@@ -83,20 +87,36 @@ export async function runCli(argv) {
         await runNewWizard({ cwd: process.cwd() });
         return;
       }
-      const result = await createProject({
-        name,
-        parentDir: process.cwd(),
-        description: opts.description,
-        stack: opts.stack,
-        database: opts.db,
-        force: !!opts.force,
-      });
+      if (opts.model && !opts.provider) {
+        console.error(ansi.red('error: ') + '--model necesita --provider.');
+        process.exitCode = 1;
+        return;
+      }
+      let result;
+      try {
+        result = await createProject({
+          name,
+          parentDir: process.cwd(),
+          description: opts.description,
+          stack: opts.stack,
+          database: opts.db,
+          agent: opts.agent,
+          model: opts.provider ? { provider: opts.provider, name: opts.model ?? null } : undefined,
+          launch: opts.launchCommand ? { customCommand: opts.launchCommand } : undefined,
+          force: !!opts.force,
+        });
+      } catch (err) {
+        console.error(ansi.red('error: ') + (err.message ?? String(err)));
+        process.exitCode = 1;
+        return;
+      }
       console.log(ansi.green('✓') + ' Created project ' + ansi.bold(result.safeName));
       console.log('  ' + ansi.dim(result.projectRoot));
       if (result.warnings.length) {
         for (const w of result.warnings) console.log(ansi.yellow('  ⚠ ' + w));
       }
-      console.log('\nNext: ' + ansi.cyan(`cd ${result.safeName}`) + ' and run ' + ansi.cyan('claude'));
+      console.log('\nNext: ' + ansi.cyan(`storm open ${result.safeName}`) +
+        ansi.dim('   (or: cd ' + result.safeName + ' && storm launch)'));
     });
 
   // -------------------------------------------------------------------------
@@ -331,7 +351,7 @@ export async function runCli(argv) {
   // -------------------------------------------------------------------------
   program
     .command('launch')
-    .description('Launch Claude Code using the configured provider/model.')
+    .description("Launch the project's agent with its provider/model (see `storm project`).")
     .action(async () => {
       await launchCmd({ cwd: process.cwd() });
     });
@@ -445,9 +465,11 @@ export async function runCli(argv) {
     .description('Importa un proyecto existente: analiza con LLM y agrega scaffolding storm.')
     .option('-y, --yes', 'Pisar archivos existentes sin preguntar (no interactivo).')
     .option('--mode <mode>', 'Profundidad del análisis: shallow | deep.')
-    .option('--provider <id>', 'Provider del LLM: ollama-cloud | ollama-local | claude.')
-    .option('--model <name>', 'Nombre del modelo (e.g. kimi-k2.6:cloud).')
+    .option('--provider <id>', 'Provider para ANALIZAR: ollama-cloud | ollama-local | claude | via-claude-code | via-opencode.')
+    .option('--model <name>', 'Modelo para --provider (e.g. kimi-k2.6:cloud).')
     .option('--agent <id>', 'Agent (CLI): claude-code | opencode | <custom>.')
+    .option('--launch-provider <id>', 'Provider para ABRIR el proyecto. Default: --provider si puede lanzar el agent.')
+    .option('--launch-model <name>', 'Modelo para --launch-provider.')
     .option('--name <name>', 'Nombre del proyecto.')
     .option('--description <text>', 'Descripción corta.')
     .option('--stack <id>', 'Override del stack detectado por el LLM.')
@@ -459,9 +481,11 @@ export async function runCli(argv) {
     .action(async (importPath, opts) => {
       // Flags-driven invocation forces non-interactive mode.
       const flagsPresent = opts.yes || opts.mode || opts.provider || opts.model ||
-        opts.skipLlm || opts.name || opts.stack || opts.db ||
+        opts.agent || opts.launchProvider || opts.launchModel ||
+        opts.skipLlm || opts.name || opts.description || opts.stack || opts.db ||
         (opts.branch && opts.branch.length) ||
-        (opts.skill && opts.skill.length);
+        (opts.skill && opts.skill.length) ||
+        (opts.agentName && opts.agentName.length);
 
       // No TTY → can't run the wizard regardless of flags.
       const noTty = !process.stdin.isTTY || !process.stdout.isTTY;
@@ -484,6 +508,8 @@ export async function runCli(argv) {
             provider: opts.provider,
             model: opts.model ?? null,
             agent: opts.agent,
+            launchProvider: opts.launchProvider,
+            launchModel: opts.launchModel ?? null,
             name: opts.name,
             description: opts.description,
             stack: opts.stack,
@@ -571,7 +597,7 @@ export async function runCli(argv) {
   // -------------------------------------------------------------------------
   const cfgCmd = program
     .command('config')
-    .description('Show or modify the global storm-ai configuration.')
+    .description('Show or modify the global storm-ai defaults (for new projects and `storm import`).')
     .action(async () => {
       // No subcommand → run interactive wizard.
       const { runConfigWizard } = await import('./ui/wizard-config.js');
@@ -591,7 +617,7 @@ export async function runCli(argv) {
         console.log(`  ${'provider:'.padEnd(17)}${cfg.defaultProvider?.provider ?? ansi.dim('(unset)')}`);
         console.log(`  ${'model:'.padEnd(17)}${cfg.defaultProvider?.model ?? ansi.dim('(unset)')}`);
         console.log(`  ${'agent:'.padEnd(17)}${cfg.defaultAgent ?? 'claude-code'}`);
-        console.log(`  ${'launchCommand:'.padEnd(17)}${cfg.defaultLaunchCommand ?? ansi.dim('(unset, uses agent template)')}`);
+        console.log(`  ${'launchCommand:'.padEnd(17)}${cfg.defaultLaunchCommand ?? ansi.dim('(unset; only used for custom agents)')}`);
         console.log(`  ${'ollamaHost:'.padEnd(17)}${cfg.ollamaHost ?? 'http://127.0.0.1:11434'}`);
         return;
       }
@@ -616,6 +642,11 @@ export async function runCli(argv) {
       try {
         await setConfigValue(key, value);
         console.log(ansi.green('✓') + ` ${key} = ${ansi.cyan(value)}`);
+        if (key === 'provider') {
+          console.log(ansi.dim('  model reseteado si cambió el provider. Proyectos existentes: `storm project`.'));
+        } else if (key === 'model' || key === 'agent') {
+          console.log(ansi.dim('  Solo afecta proyectos nuevos. Para uno existente: `storm project set ' + key + ' ...`.'));
+        }
       } catch (err) {
         console.error(ansi.red('error: ') + err.message);
         process.exitCode = 1;
@@ -642,6 +673,92 @@ export async function runCli(argv) {
     .action(async () => {
       const { CONFIG_FILE_PATH } = await import('./commands/config.js');
       console.log(CONFIG_FILE_PATH);
+    });
+
+  // -------------------------------------------------------------------------
+  // storm project — per-project launch settings (provider/model/agent)
+  // -------------------------------------------------------------------------
+  const projCmd = program
+    .command('project')
+    .description('Show or change how THIS project is launched (agent, provider, model).')
+    .action(async () => {
+      const { requireProjectRoot } = await import('./core/paths.js');
+      const { runProjectSettingsWizard } = await import('./ui/wizard-project.js');
+      const root = await requireProjectRoot(process.cwd());
+      await runProjectSettingsWizard({ projectRoot: root });
+    });
+
+  projCmd
+    .command('get [key]')
+    .description('Print provider, model, agent and launchCommand (or one of them).')
+    .action(async (key) => {
+      const { requireProjectRoot } = await import('./core/paths.js');
+      const { getProjectSettings, validateProjectSettings, PROJECT_KEYS } = await import('./commands/project.js');
+      const root = await requireProjectRoot(process.cwd());
+      const s = await getProjectSettings(root);
+      if (key) {
+        if (!PROJECT_KEYS.includes(key)) {
+          console.error(ansi.red('error: ') + `Clave desconocida: ${key}. Válidas: ${PROJECT_KEYS.join(', ')}.`);
+          process.exitCode = 1;
+          return;
+        }
+        console.log(s[key] ?? ansi.dim('(no value)'));
+        return;
+      }
+      console.log('');
+      console.log(`  ${ansi.dim('project:')}         ${root}`);
+      for (const k of PROJECT_KEYS) {
+        console.log(`  ${(k + ':').padEnd(17)}${s[k] ?? ansi.dim('(unset)')}`);
+      }
+      const problem = validateProjectSettings(s);
+      if (problem) console.log('\n  ' + ansi.yellow('⚠ ' + problem));
+    });
+
+  const runProjectSet = async (key, value, extra = {}) => {
+    const { requireProjectRoot } = await import('./core/paths.js');
+    const { updateProjectSettings, PROJECT_KEYS } = await import('./commands/project.js');
+    if (!PROJECT_KEYS.includes(key)) {
+      throw new Error(`Clave desconocida: ${key}. Válidas: ${PROJECT_KEYS.join(', ')}.`);
+    }
+    const root = await requireProjectRoot(process.cwd());
+    const r = await updateProjectSettings(root, { [key]: value, ...extra });
+    for (const k of PROJECT_KEYS) {
+      if (r.before[k] !== r.after[k]) {
+        console.log(ansi.green('✓') + ` ${k}: ${r.before[k] ?? '(unset)'} → ${ansi.cyan(r.after[k] ?? '(unset)')}`);
+      }
+    }
+    for (const n of r.notes) console.log(ansi.dim('  ' + n));
+    if (r.scaffold?.createdFiles.length) {
+      console.log(ansi.dim('  creados: ' + r.scaffold.createdFiles.join(', ')));
+    }
+  };
+
+  projCmd
+    .command('set <key> <value>')
+    .description('Set provider, model, agent or launchCommand for this project.')
+    .option('--model <name>', 'With `set provider`: the model for it (needed for ollama-*).')
+    .action(async (key, value, opts) => {
+      try {
+        if (opts.model && key !== 'provider') {
+          throw new Error('--model solo se usa con `storm project set provider <id> --model <name>`.');
+        }
+        await runProjectSet(key, value, opts.model ? { model: opts.model } : {});
+      } catch (err) {
+        console.error(ansi.red('error: ') + err.message);
+        process.exitCode = 1;
+      }
+    });
+
+  projCmd
+    .command('unset <key>')
+    .description('Clear model or launchCommand for this project.')
+    .action(async (key) => {
+      try {
+        await runProjectSet(key, null);
+      } catch (err) {
+        console.error(ansi.red('error: ') + err.message);
+        process.exitCode = 1;
+      }
     });
 
   // -------------------------------------------------------------------------

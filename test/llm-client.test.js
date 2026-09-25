@@ -70,7 +70,7 @@ test('via-claude-code: spawns `claude --print` and returns stdout', async () => 
   }
 });
 
-test('via-opencode: spawns `opencode run --print` and returns stdout', async () => {
+test('via-opencode: spawns `opencode run` and returns stdout', async () => {
   const fake = await fakeBinary('opencode', 'hello from fake opencode');
   try {
     await withPath(fake.dir, async () => {
@@ -82,6 +82,22 @@ test('via-opencode: spawns `opencode run --print` and returns stdout', async () 
     });
   } finally {
     await fake.cleanup();
+  }
+});
+
+test('via-opencode: does not pass --print (opencode run rejects unknown flags)', { skip: isWindows }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'storm-fakecli-'));
+  const file = path.join(dir, 'opencode');
+  // Echo the argv back so we can assert on it.
+  await writeFile(file, `#!/bin/sh\nprintf 'args=[%s]' "$*"\n`, 'utf8');
+  await chmod(file, 0o755);
+  try {
+    await withPath(dir, async () => {
+      const out = await complete({ provider: 'via-opencode', prompt: 'ping' });
+      assert.equal(out.trim(), 'args=[run]');
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

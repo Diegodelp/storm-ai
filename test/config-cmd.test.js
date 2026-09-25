@@ -118,3 +118,60 @@ test('resetConfig: wipes back to defaults', { skip: skipOnWindows }, async () =>
     assert.equal(r.value, 'claude-code');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Provider/model consistency
+// ---------------------------------------------------------------------------
+
+test('setConfigValue: changing provider clears the old model', { skip: skipOnWindows }, async () => {
+  await withFakeHome(async () => {
+    const mod = await import(`../src/commands/config.js?cb=${Date.now()}`);
+    await mod.setConfigValue('provider', 'ollama-cloud');
+    await mod.setConfigValue('model', 'kimi-k2.6:cloud');
+    await mod.setConfigValue('provider', 'via-opencode');
+    assert.equal((await mod.getConfigValue('provider')).value, 'via-opencode');
+    assert.equal((await mod.getConfigValue('model')).value, null);
+  });
+});
+
+test('setConfigValue: re-setting the same provider keeps the model', { skip: skipOnWindows }, async () => {
+  await withFakeHome(async () => {
+    const mod = await import(`../src/commands/config.js?cb=${Date.now()}`);
+    await mod.setConfigValue('provider', 'ollama-cloud');
+    await mod.setConfigValue('model', 'kimi-k2.6:cloud');
+    await mod.setConfigValue('provider', 'ollama-cloud');
+    assert.equal((await mod.getConfigValue('model')).value, 'kimi-k2.6:cloud');
+  });
+});
+
+test('setConfigValue: rejects unknown providers and mismatched models', { skip: skipOnWindows }, async () => {
+  await withFakeHome(async () => {
+    const mod = await import(`../src/commands/config.js?cb=${Date.now()}`);
+    await assert.rejects(() => mod.setConfigValue('provider', 'openai'), /Provider desconocido/);
+    await assert.rejects(() => mod.setConfigValue('model', 'kimi-k2.6:cloud'), /Primero elegí un provider/);
+    await mod.setConfigValue('provider', 'claude');
+    await assert.rejects(() => mod.setConfigValue('model', 'kimi-k2.6:cloud'), /no usa un modelo/);
+    await mod.setConfigValue('provider', 'ollama-cloud');
+    await assert.rejects(() => mod.setConfigValue('model', 'qwen3.5:9b'), /no es un modelo cloud/);
+  });
+});
+
+test('setConfigValue: unset provider clears it', { skip: skipOnWindows }, async () => {
+  await withFakeHome(async () => {
+    const mod = await import(`../src/commands/config.js?cb=${Date.now()}`);
+    await mod.setConfigValue('provider', 'ollama-cloud');
+    await mod.setConfigValue('provider', null);
+    const cfg = await mod.readAllConfig();
+    assert.equal(cfg.defaultProvider, null);
+  });
+});
+
+test('setProviderAndModel: saves both or nothing', { skip: skipOnWindows }, async () => {
+  await withFakeHome(async () => {
+    const mod = await import(`../src/commands/config.js?cb=${Date.now()}`);
+    await mod.setProviderAndModel('ollama-local', 'qwen3.5:9b');
+    await assert.rejects(() => mod.setProviderAndModel('ollama-cloud', 'qwen3.5:9b'));
+    const cfg = await mod.readAllConfig();
+    assert.deepEqual(cfg.defaultProvider, { provider: 'ollama-local', model: 'qwen3.5:9b' });
+  });
+});

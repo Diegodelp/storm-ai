@@ -161,3 +161,67 @@ test('buildAgentLaunchCommand: empty customCommand throws', () => {
     /vacío/,
   );
 });
+
+// ---------------------------------------------------------------------------
+// Provider ↔ agent compatibility
+// ---------------------------------------------------------------------------
+
+import {
+  getCompatibleProviders,
+  isProviderCompatible,
+  resolveLaunchModel,
+  getInstructionsFile,
+} from '../src/core/agents.js';
+import { PROVIDERS } from '../src/core/providers.js';
+
+test('buildAgentLaunchCommand: via-* provider launches its own CLI', () => {
+  assert.deepEqual(
+    buildAgentLaunchCommand({ provider: 'via-claude-code', agentId: 'claude-code', modelName: null }),
+    { command: 'claude', args: [] },
+  );
+  assert.deepEqual(
+    buildAgentLaunchCommand({ provider: 'via-opencode', agentId: 'opencode', modelName: null }),
+    { command: 'opencode', args: [] },
+  );
+});
+
+test('buildAgentLaunchCommand: via-* provider with the other CLI throws a clear error', () => {
+  assert.throws(
+    () => buildAgentLaunchCommand({ provider: 'via-opencode', agentId: 'claude-code', modelName: null }),
+    /no se puede lanzar con el provider "via-opencode"/,
+  );
+  assert.throws(
+    () => buildAgentLaunchCommand({ provider: 'via-claude-code', agentId: 'opencode', modelName: null }),
+    /no se puede lanzar/,
+  );
+});
+
+test('every known agent: its providers exist and its nativeProvider is compatible', () => {
+  const ids = new Set(PROVIDERS.map((p) => p.id));
+  for (const a of AGENTS) {
+    for (const p of getCompatibleProviders(a.id)) assert.ok(ids.has(p), `${a.id}: unknown provider ${p}`);
+    assert.ok(isProviderCompatible(a.nativeProvider, a.id), `${a.id}: nativeProvider not compatible`);
+  }
+});
+
+test('custom agents accept any provider', () => {
+  assert.equal(getCompatibleProviders('aider'), null);
+  assert.equal(isProviderCompatible('via-opencode', 'aider'), true);
+});
+
+test('resolveLaunchModel: keeps compatible models, falls back to the native provider', () => {
+  assert.deepEqual(
+    resolveLaunchModel({ provider: 'ollama-cloud', name: 'kimi-k2.6:cloud' }, 'opencode'),
+    { model: { provider: 'ollama-cloud', name: 'kimi-k2.6:cloud' }, adjusted: false },
+  );
+  assert.deepEqual(
+    resolveLaunchModel({ provider: 'via-opencode', name: null }, 'claude-code'),
+    { model: { provider: 'via-claude-code', name: null }, adjusted: true },
+  );
+});
+
+test('getInstructionsFile: CLAUDE.md for Claude Code, root AGENTS.md otherwise', () => {
+  assert.equal(getInstructionsFile('claude-code'), 'CLAUDE.md');
+  assert.equal(getInstructionsFile('opencode'), 'AGENTS.md');
+  assert.equal(getInstructionsFile('aider'), 'AGENTS.md');
+});

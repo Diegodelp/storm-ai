@@ -30,12 +30,25 @@ import { refreshCompactContext } from '../core/compact.js';
 import { safeName, projectPaths, fileExists } from '../core/paths.js';
 import { writeState, regenerateTasksMd } from '../core/tasks.js';
 import { getStack } from '../core/stacks.js';
-import { getDefaultAgent } from '../core/global-config.js';
+import {
+  getDefaultAgent,
+  getDefaultProvider,
+  getDefaultLaunchCommand,
+} from '../core/global-config.js';
+import {
+  getAgent,
+  getInstructionsFile,
+  isProviderCompatible,
+  resolveLaunchModel,
+  getCompatibleProviders,
+} from '../core/agents.js';
+import { validateProviderModel, providerNeedsModel } from '../core/providers.js';
 import {
   BUILTIN_OPENCODE_COMMANDS,
   BUILTIN_OPENCODE_AGENTS,
   renderOpencodeCommand,
   renderOpencodeAgent,
+  renderOpencodeIndex,
 } from '../core/opencode-scaffold.js';
 
 /**
@@ -48,6 +61,12 @@ import {
  * @property {Array<{path:string,description?:string,pinned?:string[]}>} [branches]
  * @property {Array<{name:string,builtin?:boolean,description?:string}>} [skills]
  * @property {Array<{name:string,slash:string,description?:string,tasks?:string[]}>} [agents]
+ * @property {{provider:string,name:string|null}} [model]
+ *   Launch provider/model. Default: global default provider (if it can
+ *   drive the agent), else the agent's native provider.
+ * @property {string} [agent]           Agent id. Default: global default.
+ * @property {{customCommand?: string}} [launch]
+ *   Default: global launchCommand, only for agents storm doesn't know.
  * @property {boolean} [force]          Overwrite if the target dir exists.
  */
 
@@ -98,14 +117,8 @@ export async function createProject(input) {
 
   // Resolve agent: explicit input > global default > 'claude-code'.
   const resolvedAgent = input.agent ?? (await getDefaultAgent());
-
-  if (resolvedAgent === 'claude-code') {
-    await mkdir(projectPaths.claudeCommands(projectRoot), { recursive: true });
-    await mkdir(projectPaths.claudeSkills(projectRoot), { recursive: true });
-    await mkdir(projectPaths.claudeAgents(projectRoot), { recursive: true });
-  } else if (resolvedAgent === 'opencode') {
-    await mkdir(projectPaths.opencodeDir(projectRoot), { recursive: true });
-  }
+  const model = await resolveNewProjectModel(input.model, resolvedAgent);
+  const launch = input.launch ?? (await defaultLaunchFor(resolvedAgent));
 
   const config = createConfig({
     name: slug,
@@ -114,9 +127,9 @@ export async function createProject(input) {
     stackId: input.stackId ?? 'other',
     database: input.database ?? '',
     databaseId: input.databaseId ?? 'other',
-    model: input.model,
+    model,
     agent: resolvedAgent,
-    launch: input.launch ?? {},
+    launch,
     skills,
     agents: input.agents ?? [],
     branches: input.branches ?? [],
@@ -142,70 +155,10 @@ export async function createProject(input) {
   await regenerateTasksMd(projectRoot, state);
   createdFiles.push('.context-compact/task-state.json', 'TASKS.md');
 
-  // 5. Write agent instructions file (CLAUDE.md or .opencode/AGENTS.md
-  // depending on the agent the user picked).
-  const agentMd = renderAgentMd({ config, slug });
-  const agentMdPath = path.join(projectRoot, agentMd.filename);
-  await mkdir(path.dirname(agentMdPath), { recursive: true });
-  await writeFile(agentMdPath, agentMd.content, 'utf8');
-  createdFiles.push(agentMd.filename);
-
-  // 6. Write built-in slash commands.
-  // These use Claude Code's specific markdown format (`.claude/commands/<name>.md`
-  // with a frontmatter description). OpenCode and other agents have their
-  // own command/prompt systems, so we only emit these when the user picked
-  // claude-code. Other agents can read the workflow from AGENTS.md.
-  if (resolvedAgent === 'claude-code') {
-    const commandFiles = renderBuiltinCommands();
-    for (const { filename, content } of commandFiles) {
-      const dest = path.join(projectPaths.claudeCommands(projectRoot), filename);
-      await writeFile(dest, content, 'utf8');
-      createdFiles.push(path.join('.claude', 'commands', filename));
-    }
-
-    // 7. Write user skills (if any) as placeholder .md files.
-    // These live under .claude/skills/ which is Claude Code's convention.
-    // For opencode users, the skills are still tracked in project.config.json
-    // (which OpenCode reads) — they just don't get individual .md scaffolds.
-    for (const skill of skills.filter((s) => !s.builtin)) {
-      const filename = `${safeName(skill.name)}.md`;
-      const dest = path.join(projectPaths.claudeSkills(projectRoot), filename);
-      await writeFile(dest, renderSkillSkeleton(skill), 'utf8');
-      createdFiles.push(path.join('.claude', 'skills', filename));
-    }
-
-    // 8. Write agents (if any).
-    for (const agent of input.agents ?? []) {
-      const filename = `${safeName(agent.slash || agent.name)}.md`;
-      const dest = path.join(projectPaths.claudeAgents(projectRoot), filename);
-      await writeFile(dest, renderAgentSkeleton(agent), 'utf8');
-      createdFiles.push(path.join('.claude', 'agents', filename));
-    }
-  } else if (resolvedAgent === 'opencode') {
-    // OpenCode-specific scaffolding: knowledge-base under .opencode/.
-    // AGENTS.md is auto-loaded by OpenCode and indexes everything below.
-    await mkdir(projectPaths.opencodeCommands(projectRoot), { recursive: true });
-    await mkdir(projectPaths.opencodeAgents(projectRoot), { recursive: true });
-
-    for (const cmd of BUILTIN_OPENCODE_COMMANDS) {
-      const dest = path.join(projectPaths.opencodeCommands(projectRoot), `${cmd.id}.md`);
-      await writeFile(dest, renderOpencodeCommand(cmd), 'utf8');
-      createdFiles.push(path.join('.opencode', 'commands', `${cmd.id}.md`));
-    }
-    for (const ag of BUILTIN_OPENCODE_AGENTS) {
-      const dest = path.join(projectPaths.opencodeAgents(projectRoot), `${ag.id}.md`);
-      await writeFile(dest, renderOpencodeAgent(ag), 'utf8');
-      createdFiles.push(path.join('.opencode', 'agents', `${ag.id}.md`));
-    }
-
-    // User-defined agents from input become per-project role docs.
-    for (const agent of input.agents ?? []) {
-      const filename = `${safeName(agent.slash || agent.name)}.md`;
-      const dest = path.join(projectPaths.opencodeAgents(projectRoot), filename);
-      await writeFile(dest, renderAgentSkeleton(agent), 'utf8');
-      createdFiles.push(path.join('.opencode', 'agents', filename));
-    }
-  }
+  // 5-8. Agent-specific files: instructions file (CLAUDE.md / AGENTS.md),
+  // built-in commands, skill and agent skeletons.
+  const scaffold = await writeAgentScaffold({ projectRoot, config });
+  createdFiles.push(...scaffold.createdFiles);
 
   // 9. Run the first compact-context refresh. At this point most projects
   // have no source files yet (we just scaffolded), so this mostly writes
@@ -231,6 +184,118 @@ export async function createProject(input) {
     createdFiles,
     warnings,
   };
+}
+
+/**
+ * Pick the launch model for a new project.
+ * Explicit input must be valid and compatible with the agent (we throw
+ * otherwise, so flag typos don't produce projects that can't launch).
+ * Without input we use the global default when it can drive the agent,
+ * else the agent's native provider.
+ *
+ * @param {{provider:string,name:string|null}|undefined} model
+ * @param {string} agentId
+ * @returns {Promise<{provider:string,name:string|null}>}
+ */
+export async function resolveNewProjectModel(model, agentId) {
+  if (model) {
+    const err = validateProviderModel(model.provider, model.name);
+    if (err) throw new Error(err);
+    if (!isProviderCompatible(model.provider, agentId)) {
+      throw new Error(
+        `El provider "${model.provider}" no puede lanzar ${getAgent(agentId)?.label ?? agentId}. ` +
+        `Compatibles: ${getCompatibleProviders(agentId).join(', ')}.`,
+      );
+    }
+    return { provider: model.provider, name: model.name ?? null };
+  }
+  const def = await getDefaultProvider();
+  // A default without its required model (e.g. `storm config set provider
+  // ollama-cloud` alone) can't launch anything: ignore it.
+  const usable = def && !(providerNeedsModel(def.provider) && !def.model);
+  const base = usable ? { provider: def.provider, name: def.model } : { provider: 'claude', name: null };
+  return resolveLaunchModel(base, agentId).model;
+}
+
+/**
+ * The global launch command is the way to run agents storm doesn't
+ * know; known agents use their own launch template.
+ * @param {string} agentId
+ */
+async function defaultLaunchFor(agentId) {
+  if (getAgent(agentId)) return {};
+  const cmd = await getDefaultLaunchCommand();
+  return cmd ? { customCommand: cmd } : {};
+}
+
+/**
+ * Write the agent-specific scaffolding for a project: the instructions
+ * file the agent auto-loads plus its commands/skills/agents files.
+ *
+ * Used when creating a project and when switching a project to another
+ * agent (`storm project set agent ...`). With `overwrite: false`, files
+ * that already exist are left alone (and reported as skipped), except
+ * storm's own built-in command/role docs which are always refreshed.
+ *
+ * @param {{projectRoot: string, config: import('../core/config.js').ProjectConfig, overwrite?: boolean}} input
+ * @returns {Promise<{createdFiles: string[], skippedFiles: string[]}>}
+ */
+export async function writeAgentScaffold({ projectRoot, config, overwrite = true }) {
+  const agentId = config.agent ?? 'claude-code';
+  /** @type {string[]} */
+  const createdFiles = [];
+  /** @type {string[]} */
+  const skippedFiles = [];
+
+  const write = async (rel, content, force = overwrite) => {
+    const abs = path.join(projectRoot, rel);
+    if (!force && (await fileExists(abs))) {
+      skippedFiles.push(rel);
+      return;
+    }
+    await mkdir(path.dirname(abs), { recursive: true });
+    await writeFile(abs, content, 'utf8');
+    createdFiles.push(rel);
+  };
+
+  const agentMd = renderAgentMd({ config });
+  await write(agentMd.filename, agentMd.content);
+
+  if (agentId === 'claude-code') {
+    await mkdir(projectPaths.claudeCommands(projectRoot), { recursive: true });
+    await mkdir(projectPaths.claudeSkills(projectRoot), { recursive: true });
+    await mkdir(projectPaths.claudeAgents(projectRoot), { recursive: true });
+
+    // Built-in slash commands, in Claude Code's `.claude/commands/` format.
+    for (const { filename, content } of renderBuiltinCommands()) {
+      await write(path.join('.claude', 'commands', filename), content);
+    }
+    // User skills as placeholder .md files (Claude Code's convention).
+    for (const skill of config.skills.filter((s) => !s.builtin)) {
+      await write(path.join('.claude', 'skills', `${safeName(skill.name)}.md`), renderSkillSkeleton(skill));
+    }
+    for (const agent of config.agents) {
+      await write(path.join('.claude', 'agents', `${safeName(agent.slash || agent.name)}.md`), renderAgentSkeleton(agent));
+    }
+  } else if (agentId === 'opencode') {
+    // OpenCode loads .opencode/commands/*.md and .opencode/agents/*.md;
+    // AGENTS.md at the root indexes them.
+    await mkdir(projectPaths.opencodeCommands(projectRoot), { recursive: true });
+    await mkdir(projectPaths.opencodeAgents(projectRoot), { recursive: true });
+
+    for (const cmd of BUILTIN_OPENCODE_COMMANDS) {
+      await write(path.join('.opencode', 'commands', `${cmd.id}.md`), renderOpencodeCommand(cmd), true);
+    }
+    for (const ag of BUILTIN_OPENCODE_AGENTS) {
+      await write(path.join('.opencode', 'agents', `${ag.id}.md`), renderOpencodeAgent(ag), true);
+    }
+    // User-defined agents become per-project role docs.
+    for (const agent of config.agents) {
+      await write(path.join('.opencode', 'agents', `${safeName(agent.slash || agent.name)}.md`), renderAgentSkeleton(agent));
+    }
+  }
+
+  return { createdFiles, skippedFiles };
 }
 
 // ---------------------------------------------------------------------------
@@ -269,23 +334,18 @@ function mergeBuiltinSkills(userSkills) {
 // ---------------------------------------------------------------------------
 
 /**
- * @param {{config: import('../core/config.js').ProjectConfig, slug: string}} args
- */
-/**
  * Render the project's "agent instructions" markdown file.
  *
  * @param {Object} args
  * @param {import('../core/config.js').ProjectConfig} args.config
- * @param {string} args.slug
  * @param {string} [args.agentId]   'claude-code' | 'opencode' | other.
  *                                  Defaults to config.agent.
  * @returns {{ filename: string, content: string }}
  *   filename relative to projectRoot:
- *     'CLAUDE.md'              (claude-code)
- *     '.opencode/AGENTS.md'    (opencode)
- *     'AGENTS.md'              (other)
+ *     'CLAUDE.md'   (claude-code)
+ *     'AGENTS.md'   (opencode and anything else)
  */
-function renderAgentMd({ config, slug, agentId }) {
+export function renderAgentMd({ config, agentId }) {
   const agent = agentId ?? config.agent ?? 'claude-code';
   const branches = config.compact_context.branches;
   const skills = config.skills;
@@ -337,12 +397,25 @@ function renderAgentMd({ config, slug, agentId }) {
       : 'This creates `.claude/skills/<slug>.md` (where Claude Code looks for them) and tracks it in `project.config.json`.';
 
   // Filename / location depends on the agent.
-  const filename =
-    agent === 'opencode'    ? '.opencode/AGENTS.md' :
-    agent === 'claude-code' ? 'CLAUDE.md' :
-    'AGENTS.md';
+  const filename = getInstructionsFile(agent);
 
-  const content = `# ${slug}
+  // OpenCode: list the command/role files under .opencode/ so the LLM
+  // knows they exist.
+  let opencodeIndexBlock = '';
+  if (agent === 'opencode') {
+    const idx = renderOpencodeIndex();
+    opencodeIndexBlock = `
+## Storm CLI commands (referencia)
+
+${idx.commands}
+
+## Storm roles (referencia)
+
+${idx.agents}
+`;
+  }
+
+  const content = `# ${config.name}
 
 ${config.description || '_No project description yet._'}
 
@@ -408,7 +481,7 @@ ${skillsLocationHint}
 ### Available agents
 
 ${agentLines}
-
+${opencodeIndexBlock}
 ## Guardrails
 
 - **Never edit \`TASKS.md\` directly.** It is a view generated from \`.context-compact/task-state.json\`. Use the task commands.

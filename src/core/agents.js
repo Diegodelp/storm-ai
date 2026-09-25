@@ -6,10 +6,13 @@
  * "provider" (who serves the model — Anthropic, Ollama cloud, Ollama
  * local). The two combine like a matrix:
  *
- *                       Ollama cloud   Ollama local   Claude API
- *   Claude Code         OK             OK             OK (default)
- *   OpenCode            OK             OK             OK
- *   <custom>            user-defined launch command
+ *                  Ollama cloud  Ollama local  Claude API  via-claude-code  via-opencode
+ *   Claude Code    OK            OK            OK          OK               -
+ *   OpenCode       OK            OK            OK          -                OK
+ *   <custom>       user-defined launch command (any provider)
+ *
+ * The `via-*` providers mean "the agent CLI uses whatever model it has
+ * configured itself", so each one only makes sense with its own CLI.
  *
  * Each agent declares:
  *   - id, label, hint     (for the wizard)
@@ -42,8 +45,13 @@ const DETECT_TIMEOUT_MS = 5000;
  * @property {string} hint
  * @property {string} detectCommand          Shell command to verify install.
  * @property {Record<string, AgentLaunchPlan>} launchTemplates
- *   Keys are provider ids ('ollama-cloud', 'ollama-local', 'claude').
- *   The value tells how to spawn for that provider+agent combination.
+ *   Keys are provider ids. The set of keys IS the list of providers the
+ *   agent supports — see getCompatibleProviders().
+ * @property {string} nativeProvider
+ *   Provider used when the chosen one isn't compatible with this agent:
+ *   the `via-*` provider that lets the CLI use its own model config.
+ * @property {string} instructionsFile
+ *   Project-relative file the agent auto-loads as project instructions.
  * @property {Object} install
  * @property {string|null} install.linux    One-liner shell command (or null).
  * @property {string|null} install.darwin
@@ -62,7 +70,11 @@ export const AGENTS = [
       'ollama-cloud': { command: 'ollama', args: ['launch', 'claude', '--model', '{{model}}'] },
       'ollama-local': { command: 'ollama', args: ['launch', 'claude', '--model', '{{model}}'] },
       'claude':       { command: 'claude', args: [] },
+      // Claude Code with its own config (subscription, API key, etc).
+      'via-claude-code': { command: 'claude', args: [] },
     },
+    nativeProvider: 'via-claude-code',
+    instructionsFile: 'CLAUDE.md',
     install: {
       // Linux / macOS: official one-liner from claude.ai/install.sh.
       linux:  'curl -fsSL https://claude.ai/install.sh | bash',
@@ -86,7 +98,13 @@ export const AGENTS = [
       // OpenCode standalone reads config from ~/.config/opencode/opencode.json
       // and can use Anthropic via that config. We just spawn the binary.
       'claude':       { command: 'opencode', args: [] },
+      // OpenCode with its own config (ChatGPT, Gemini, Anthropic, ...).
+      'via-opencode': { command: 'opencode', args: [] },
     },
+    nativeProvider: 'via-opencode',
+    // OpenCode walks up from the cwd looking for AGENTS.md; it does NOT
+    // read .opencode/AGENTS.md.
+    instructionsFile: 'AGENTS.md',
     install: {
       linux:  'curl -fsSL https://opencode.ai/install | bash',
       darwin: 'curl -fsSL https://opencode.ai/install | bash',
@@ -105,6 +123,65 @@ export const AGENTS = [
  */
 export function getAgent(id) {
   return AGENTS.find((a) => a.id === id) ?? null;
+}
+
+/**
+ * Provider ids this agent can be launched with. Unknown (custom) agents
+ * are launched through a user command, so they accept any provider.
+ *
+ * @param {string} agentId
+ * @returns {string[]|null}  null = any provider (custom agent).
+ */
+export function getCompatibleProviders(agentId) {
+  const agent = getAgent(agentId);
+  return agent ? Object.keys(agent.launchTemplates) : null;
+}
+
+/**
+ * @param {string} provider
+ * @param {string} agentId
+ * @returns {boolean}
+ */
+export function isProviderCompatible(provider, agentId) {
+  const compatible = getCompatibleProviders(agentId);
+  return compatible === null || compatible.includes(provider);
+}
+
+/**
+ * Return a launch model that works with `agentId`. If `model.provider`
+ * can't drive that agent (e.g. via-opencode + Claude Code), fall back to
+ * the agent's native provider and drop the model name.
+ *
+ * @param {{provider: string, name: string|null}} model
+ * @param {string} agentId
+ * @returns {{model: {provider: string, name: string|null}, adjusted: boolean}}
+ */
+export function resolveLaunchModel(model, agentId) {
+  if (isProviderCompatible(model.provider, agentId)) {
+    return { model: { provider: model.provider, name: model.name ?? null }, adjusted: false };
+  }
+  const agent = getAgent(agentId);
+  return { model: { provider: agent.nativeProvider, name: null }, adjusted: true };
+}
+
+/**
+ * Project-relative path of the instructions file storm writes for an
+ * agent. Unknown agents get a generic AGENTS.md at the root.
+ *
+ * @param {string} agentId
+ * @returns {string}
+ */
+export function getInstructionsFile(agentId) {
+  return getAgent(agentId)?.instructionsFile ?? 'AGENTS.md';
+}
+
+/**
+ * Human-readable name for an agent id (falls back to the id itself).
+ * @param {string} agentId
+ * @returns {string}
+ */
+export function agentLabel(agentId) {
+  return getAgent(agentId)?.label ?? agentId;
 }
 
 /**
@@ -171,14 +248,18 @@ export function buildAgentLaunchCommand({ provider, agentId = 'claude-code', mod
 
   const agent = getAgent(agentId);
   if (!agent) {
-    throw new Error(`Agent desconocido: ${agentId}. Configurá uno con \`storm config\`.`);
+    throw new Error(
+      `Agent desconocido: ${agentId}. Definí un comando de lanzamiento con ` +
+      '`storm project set launchCommand "<comando>"`.',
+    );
   }
 
   const tmpl = agent.launchTemplates[provider];
   if (!tmpl) {
     throw new Error(
-      `${agent.label} no tiene un launch template para provider "${provider}". ` +
-      `Combinaciones soportadas: ${Object.keys(agent.launchTemplates).join(', ')}.`,
+      `${agent.label} no se puede lanzar con el provider "${provider}". ` +
+      `Providers compatibles: ${Object.keys(agent.launchTemplates).join(', ')}. ` +
+      'Cambialo con `storm project` (o `storm project set provider <id>`).',
     );
   }
 

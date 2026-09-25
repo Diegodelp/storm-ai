@@ -270,7 +270,7 @@ test('writeImport: model shape is { provider, name }, not { provider, model }', 
 // ---------------------------------------------------------------------------
 // Agent-aware scaffolding (commit 4)
 // agent=claude-code  → CLAUDE.md at root, .claude/commands/ generated
-// agent=opencode     → .opencode/AGENTS.md, no .claude/commands/
+// agent=opencode     → AGENTS.md at root (where OpenCode looks), no .claude/commands/
 // ---------------------------------------------------------------------------
 
 test('writeImport with agent=claude-code: writes CLAUDE.md and .claude/commands/', async () => {
@@ -290,8 +290,8 @@ test('writeImport with agent=claude-code: writes CLAUDE.md and .claude/commands/
     });
     assert.ok(await exists(path.join(dir, 'CLAUDE.md')),
       'CLAUDE.md should exist for claude-code');
-    assert.equal(await exists(path.join(dir, '.opencode/AGENTS.md')), false,
-      '.opencode/AGENTS.md should NOT exist for claude-code');
+    assert.equal(await exists(path.join(dir, 'AGENTS.md')), false,
+      'AGENTS.md should NOT exist for claude-code');
     assert.ok(await exists(path.join(dir, '.claude/commands')),
       '.claude/commands/ should exist for claude-code');
   } finally {
@@ -299,7 +299,7 @@ test('writeImport with agent=claude-code: writes CLAUDE.md and .claude/commands/
   }
 });
 
-test('writeImport with agent=opencode: writes .opencode/AGENTS.md, no .claude/commands/', async () => {
+test('writeImport with agent=opencode: writes root AGENTS.md, no .claude/commands/', async () => {
   const { dir, cleanup } = await tmpProject();
   try {
     await writeImport({
@@ -314,8 +314,10 @@ test('writeImport with agent=opencode: writes .opencode/AGENTS.md, no .claude/co
       skills: [],
       agents: [],
     });
-    assert.ok(await exists(path.join(dir, '.opencode/AGENTS.md')),
-      '.opencode/AGENTS.md should exist for opencode');
+    assert.ok(await exists(path.join(dir, 'AGENTS.md')),
+      'AGENTS.md should exist at the root for opencode');
+    assert.equal(await exists(path.join(dir, '.opencode/AGENTS.md')), false,
+      'OpenCode does not read .opencode/AGENTS.md');
     assert.equal(await exists(path.join(dir, 'CLAUDE.md')), false,
       'CLAUDE.md should NOT exist for opencode');
     assert.equal(await exists(path.join(dir, '.claude/commands')), false,
@@ -389,7 +391,7 @@ test('writeImport with agent=opencode: AGENTS.md indexes commands and agents', a
       agents: [],
     });
 
-    const agentsMd = await readFile(path.join(dir, '.opencode/AGENTS.md'), 'utf8');
+    const agentsMd = await readFile(path.join(dir, 'AGENTS.md'), 'utf8');
     // The index points to the per-command files so OpenCode (which only
     // auto-loads AGENTS.md) tells the LLM these references exist.
     assert.match(agentsMd, /Storm CLI commands/i);

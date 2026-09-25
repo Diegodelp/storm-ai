@@ -2,7 +2,8 @@
  * Minimal LLM client used by `storm import`.
  *
  * Five backends:
- *   - 'ollama-cloud' / 'ollama-local': POSTs to OLLAMA_HOST/api/generate
+ *   - 'ollama-cloud' / 'ollama-local': POSTs to <ollama host>/api/generate
+ *     (OLLAMA_HOST env var, else `ollamaHost` from the global config)
  *     with the chosen model name. Cloud models include the ":cloud" suffix
  *     and Ollama itself routes the request to ollama.com — we never hit
  *     ollama.com directly.
@@ -13,7 +14,9 @@
  *     configured in Claude Code (Anthropic API, the user's Pro sub, etc.)
  *     is what we end up using.
  *   - 'via-opencode': delegates to the `opencode` CLI in the user's PATH.
- *     Runs `opencode run --print "<prompt>"`. Whatever model is configured
+ *     Runs `opencode run` with the prompt on stdin. (There is no --print
+ *     flag: `opencode run` is already non-interactive, and its argument
+ *     parser is strict, so unknown flags abort.) Whatever model is configured
  *     in OpenCode (ChatGPT via web auth, Gemini, Anthropic, etc.) is used.
  *
  * The 'via-*' providers exist so users who already pay for Claude Code or
@@ -26,7 +29,8 @@
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 
-const OLLAMA_HOST = process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434';
+import { getOllamaHost } from './global-config.js';
+
 const ANTHROPIC_HOST = 'https://api.anthropic.com';
 
 /** Default model used if none is provided. Reasonable for most tasks. */
@@ -68,7 +72,7 @@ export async function complete(input) {
   if (input.provider === 'via-opencode') {
     return viaCliComplete(input, {
       cmd: 'opencode',
-      args: ['run', '--print'],
+      args: ['run'],
       installHint: 'Corré `storm config` → Instalar agent → OpenCode.',
     });
   }
@@ -81,7 +85,8 @@ export async function complete(input) {
 
 async function ollamaComplete(input) {
   const model = input.model || DEFAULT_OLLAMA_MODEL;
-  const url = `${OLLAMA_HOST}/api/generate`;
+  const host = (await getOllamaHost()).replace(/\/+$/, '');
+  const url = `${host}/api/generate`;
 
   const body = {
     model,
@@ -103,7 +108,7 @@ async function ollamaComplete(input) {
     });
   } catch (err) {
     throw new Error(
-      `No se pudo contactar a Ollama en ${OLLAMA_HOST}. ` +
+      `No se pudo contactar a Ollama en ${host}. ` +
         `¿Está corriendo el daemon? (\`ollama serve\`). Error: ${err.message}`,
     );
   }
@@ -319,7 +324,10 @@ async function viaCliComplete(input, cliConfig) {
       }, { once: true });
     }
 
-    // Pipe the prompt to stdin.
+    // Pipe the prompt to stdin. If the CLI exits without reading it (bad
+    // flag, auth error...), the write fails with EPIPE; ignore that — the
+    // 'exit' handler reports the real error with the CLI's stderr.
+    proc.stdin.on('error', () => {});
     proc.stdin.write(fullPrompt, 'utf8');
     proc.stdin.end();
   });
