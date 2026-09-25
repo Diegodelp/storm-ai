@@ -103,7 +103,8 @@ test('via-opencode: only passes flags `opencode run` accepts (no --print)', { sk
   const dir = await mkdtemp(path.join(tmpdir(), 'storm-fakecli-'));
   const file = path.join(dir, 'opencode');
   // Echo the argv back (as an OpenCode text event) so we can assert on it.
-  await writeFile(file, `#!/bin/sh\nprintf '{"type":"text","part":{"text":"args=[%s]"}}\\n' "$*"\n`, 'utf8');
+  // Consume stdin like the real CLI, otherwise the prompt write can EPIPE.
+  await writeFile(file, `#!/bin/sh\ncat >/dev/null\nprintf '{"type":"text","part":{"text":"args=[%s]"}}\\n' "$*"\n`, 'utf8');
   await chmod(file, 0o755);
   try {
     await withPath(dir, async () => {
