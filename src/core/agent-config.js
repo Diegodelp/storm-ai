@@ -1,5 +1,5 @@
 /** Project-local runtime configuration for the CLI selected in project.config.json. */
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parse, modify, applyEdits } from 'jsonc-parser';
@@ -217,4 +217,70 @@ export async function syncAgentConfig(projectRoot, options = {}) {
   const result = await configureAgentForProject({ projectRoot, config, ...options });
   if (config.model.name !== before) await writeConfig(projectRoot, config);
   return result;
+}
+
+/**
+ * Undo configureAgentForProject: remove the fields Storm generated in the
+ * native CLI config (only those still equal to what Storm wrote), the
+ * `.opencode/AGENTS.md` instructions entry, the state file and Storm's
+ * .gitignore rules. Native files left with nothing but `$schema` are deleted.
+ * User settings are never touched.
+ *
+ * @param {string} projectRoot
+ * @param {{dryRun?: boolean}} [opts]
+ * @returns {Promise<{changedFiles: string[], deletedFiles: string[]}>}
+ */
+export async function removeAgentConfig(projectRoot, { dryRun = false } = {}) {
+  const changedFiles = [];
+  const deletedFiles = [];
+  const statePath = path.join(projectRoot, STATE_FILE);
+  const state = (await readDocument(statePath)).data;
+
+  for (const file of NATIVE_FILES) {
+    const abs = path.join(projectRoot, file);
+    const doc = await readDocument(abs);
+    if (!doc.exists) continue;
+    const before = doc.text;
+    for (const entry of state.files?.[file] ?? []) {
+      if (!Array.isArray(entry.path) || !entry.path.length || !entry.path.every((k) => typeof k === 'string')) continue;
+      if (isDeepStrictEqual(at(doc.data, entry.path), entry.value)) edit(doc, entry.path, undefined);
+    }
+    if (Array.isArray(doc.data.instructions) && doc.data.instructions.includes('.opencode/AGENTS.md')) {
+      const rest = doc.data.instructions.filter((i) => i !== '.opencode/AGENTS.md');
+      edit(doc, ['instructions'], rest.length ? rest : undefined);
+    }
+    const leftKeys = Object.keys(doc.data).filter((k) => k !== '$schema');
+    if (leftKeys.length === 0 && (state.files?.[file] || before !== doc.text)) {
+      deletedFiles.push(file);
+      if (!dryRun) await rm(abs, { force: true });
+    } else if (doc.text !== before) {
+      changedFiles.push(file);
+      if (!dryRun) await atomicWrite(abs, doc.text);
+    }
+  }
+
+  if (await fileExists(statePath)) {
+    deletedFiles.push(STATE_FILE);
+    if (!dryRun) await rm(statePath, { force: true });
+  }
+
+  const ignorePath = path.join(projectRoot, '.gitignore');
+  let ignore = null;
+  try { ignore = await readFile(ignorePath, 'utf8'); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  if (ignore !== null) {
+    const rules = new Set([`/${STATE_FILE}`, `/${CLAUDE_FILE}`]);
+    const lines = ignore.split(/\r?\n/);
+    const kept = lines.filter((l) => !rules.has(l.trim()));
+    if (kept.length !== lines.length) {
+      const text = kept.join(ignore.includes('\r\n') ? '\r\n' : '\n');
+      if (!text.trim()) {
+        deletedFiles.push('.gitignore');
+        if (!dryRun) await rm(ignorePath, { force: true });
+      } else {
+        changedFiles.push('.gitignore');
+        if (!dryRun) await atomicWrite(ignorePath, text);
+      }
+    }
+  }
+  return { changedFiles, deletedFiles };
 }
