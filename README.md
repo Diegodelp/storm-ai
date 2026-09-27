@@ -339,6 +339,7 @@ storm open my-app                   # launch the project's agent there
 storm open my-app --print           # only print the path (for shell snippets)
 storm launch                        # launch in the current dir
 storm project                       # change this project's agent/provider/model
+storm project remove                # take storm out of this project (your code is untouched)
 
 # Function index
 storm functions list [text]         # all functions with #ID, section and location
@@ -409,6 +410,21 @@ storm import "/path/to/project" --yes --skip-llm --stack nextjs-pages
 
 After import, storm runs `sync` automatically to pick up any branches the
 LLM missed (e.g. nested directories like `pages/api/admin`).
+
+If the AI analysis fails (e.g. `OpenCode: Unexpected server error`, which
+comes from the model's server), the wizard lets you retry, retry with a
+shallow analysis, pick another provider, or continue without AI and fill
+in the name/stack yourself.
+
+### Removing storm from a project
+
+`storm project remove` (or "Seleccionar proyecto" → "Quitar storm de este
+proyecto") deletes only what storm created: `project.config.json`,
+`TASKS.md`, `.context-compact/`, the generated `CLAUDE.md`/`AGENTS.md`,
+storm's built-in commands in `.claude/`/`.opencode/`, and the fields storm
+wrote in `opencode.json` / `.claude/settings.local.json`. Your code, and any
+file you wrote or edited (e.g. a hand-written `CLAUDE.md`), is kept. It
+shows the list and asks before deleting; `--dry-run` only shows it.
 
 ### Sensitive files are never indexed
 

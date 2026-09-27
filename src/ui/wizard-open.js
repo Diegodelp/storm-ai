@@ -14,6 +14,7 @@ import { validateProjectSettings } from '../commands/project.js';
 import { readConfig } from '../core/config.js';
 import { getAgent } from '../core/agents.js';
 import { runProjectSettingsWizard } from './wizard-project.js';
+import { planRemoval, removeStorm } from '../commands/remove.js';
 import * as ansi from './ansi.js';
 
 export async function runOpenWizard(_input = {}, {
@@ -21,6 +22,8 @@ export async function runOpenWizard(_input = {}, {
   launchProject = launchForProject,
   loadConfig = readConfig,
   editSettings = runProjectSettingsWizard,
+  planStormRemoval = planRemoval,
+  removeProject = removeStorm,
   ui = clack,
 } = {}) {
   ui.intro(ansi.bold('Seleccionar proyecto'));
@@ -97,6 +100,7 @@ export async function runOpenWizard(_input = {}, {
       options: [
         { value: 'open', label: `Abrir con ${launcher}` },
         { value: 'settings', label: 'Cambiar agent / provider / modelo de este proyecto' },
+        { value: 'remove', label: 'Quitar storm de este proyecto', hint: 'no borra tu código' },
         { value: 'back', label: '← Volver' },
       ],
     });
@@ -105,6 +109,25 @@ export async function runOpenWizard(_input = {}, {
     if (action === 'settings') {
       await editSettings({ projectRoot: picked.root });
       continue;
+    }
+
+    if (action === 'remove') {
+      const plan = await planStormRemoval(picked.root);
+      ui.note(
+        [
+          ...plan.remove.map((f) => `${ansi.red('-')} ${f}`),
+          ...plan.native.map((f) => `${ansi.yellow('~')} ${f}`),
+          ...plan.keep.map((f) => ansi.dim(`= ${f} (se conserva)`)),
+          '',
+          ansi.dim('Tu código y cualquier archivo que no sea de storm quedan intactos.'),
+        ].join('\n'),
+        `Quitar storm de ${picked.name}`,
+      );
+      const ok = await ui.confirm({ message: '¿Confirmás?', initialValue: false });
+      if (ui.isCancel(ok) || !ok) continue;
+      await removeProject(picked.root);
+      ui.log.success(`storm quitado de ${picked.name}. Ya no aparece en la lista de proyectos.`);
+      return 'removed';
     }
 
     ui.log.info(`Abriendo ${launcher}...`);

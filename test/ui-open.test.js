@@ -162,3 +162,19 @@ test('errors represented as strings are still shown before acknowledgement', asy
   });
   assert.deepEqual(errors, ['provider no disponible']);
 });
+
+test('the remove action shows the plan, asks, removes and leaves the list', async () => {
+  const removed = [];
+  const fixture = wizardFixture({
+    planStormRemoval: async () => ({ remove: ['project.config.json', '.context-compact/'], native: [], keep: ['CLAUDE.md'] }),
+    removeProject: async (root) => { removed.push(root); },
+  });
+  fixture.deps.ui.select = async ({ message }) => (message === 'Elegí un proyecto' ? fixture.project.root : 'remove');
+  fixture.deps.ui.confirm = async () => true;
+  fixture.deps.ui.log.success = (m) => fixture.messages.push(stripAnsi(m));
+  assert.equal(await runOpenWizard({}, fixture.deps), 'removed');
+  assert.deepEqual(removed, [fixture.project.root]);
+  assert.equal(fixture.launched(), 0);
+  assert.match(fixture.messages.join('\n'), /\.context-compact\//);
+  assert.match(fixture.messages.join('\n'), /CLAUDE\.md \(se conserva\)/);
+});

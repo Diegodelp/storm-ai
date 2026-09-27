@@ -815,6 +815,41 @@ export async function runCli(argv) {
     });
 
   projCmd
+    .command('remove')
+    .description('Quita storm de este proyecto (config, .context-compact, archivos generados). No toca tu código.')
+    .option('-y, --yes', 'No pedir confirmación.')
+    .option('--dry-run', 'Solo mostrar qué se borraría.')
+    .action(async (opts) => {
+      try {
+        const { requireProjectRoot } = await import('./core/paths.js');
+        const { planRemoval, removeStorm } = await import('./commands/remove.js');
+        const root = await requireProjectRoot(process.cwd());
+        const plan = await planRemoval(root);
+        console.log(ansi.bold(`Quitar storm de ${root}`));
+        for (const f of plan.remove) console.log(ansi.red('  - ') + f);
+        for (const f of plan.native) console.log(ansi.yellow('  ~ ') + f);
+        for (const f of plan.keep) console.log(ansi.dim(`  = ${f} (se conserva: no lo generó storm o fue editado)`));
+        if (opts.dryRun) return;
+        if (!opts.yes) {
+          if (!process.stdin.isTTY) {
+            throw new Error('Confirmá con --yes (entorno no interactivo).');
+          }
+          const clack = await import('@clack/prompts');
+          const ok = await clack.confirm({ message: '¿Quitar storm de este proyecto? Tu código no se toca.', initialValue: false });
+          if (clack.isCancel(ok) || !ok) {
+            console.log(ansi.dim('Cancelado.'));
+            return;
+          }
+        }
+        const r = await removeStorm(root);
+        console.log(ansi.green('✓') + ` storm quitado (${r.remove.length + r.removedDirs.length} elemento(s) borrados).`);
+      } catch (err) {
+        console.error(ansi.red('error: ') + err.message);
+        process.exitCode = 1;
+      }
+    });
+
+  projCmd
     .command('unset <key>')
     .description('Clear model or launchCommand for this project.')
     .action(async (key) => {
