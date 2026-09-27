@@ -501,7 +501,7 @@ src/
 │   ├── ansi.js            # ANSI color utilities
 │   ├── first-run.js       # first-run check (Node, npm, git, Ollama)
 │   ├── layout.js          # terminal layout helpers
-│   ├── logo.js            # storm logo (sharp + ASCII fallback)
+│   ├── logo.js            # storm logo (precomputed pixels + ASCII fallback)
 │   ├── menu.js            # main interactive menu
 │   ├── picker.js          # custom select component
 │   └── wizard-*.js        # one wizard per command
