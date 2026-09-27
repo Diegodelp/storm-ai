@@ -87,34 +87,76 @@ export async function runImportWizard(input) {
     }
   }
 
-  // 3. Análisis
-  const spinner = clack.spinner();
-  spinner.start(`Analizando proyecto con ${provider.model || provider.provider}`);
+  // 3. Análisis. Si falla (error del servidor del modelo, timeout...),
+  // no abortamos: se puede reintentar, bajar a superficial, cambiar de
+  // provider o seguir sin IA completando los datos a mano.
   let analysis;
-  try {
-    const r = await analyzeForImport({
-      cwd: projectRoot,
-      mode,
-      provider: provider.provider,
-      model: provider.model,
-    });
-    analysis = r.analysis;
-    spinner.stop('Análisis completo');
-  } catch (err) {
-    spinner.stop(ansi.red('Falló el análisis'));
-    clack.log.error(err.message ?? String(err));
-    if (err?.raw && process.env.STORM_DEBUG) {
-      clack.log.info('Respuesta cruda del LLM (debug):');
-      console.error(String(err.raw).slice(0, 1500));
+  let aiEnabled = true;
+  let currentMode = mode;
+  while (!analysis) {
+    const spinner = clack.spinner();
+    spinner.start(`Analizando proyecto con ${provider.model || providerLabel(provider.provider)}`);
+    try {
+      const r = await analyzeForImport({
+        cwd: projectRoot,
+        mode: currentMode,
+        provider: provider.provider,
+        model: provider.model,
+      });
+      analysis = r.analysis;
+      spinner.stop('Análisis completo');
+      break;
+    } catch (err) {
+      spinner.stop(ansi.red('Falló el análisis'));
+      clack.log.error(err.message ?? String(err));
+      if (err?.raw && process.env.STORM_DEBUG) {
+        clack.log.info('Respuesta cruda del LLM (debug):');
+        console.error(String(err.raw).slice(0, 1500));
+      }
+      if (provider.provider === 'via-opencode' || provider.provider === 'via-claude-code') {
+        clack.log.info(ansi.dim(
+          'El error viene del CLI o del servidor de su modelo. Probá el modelo a mano (ej. `opencode run "hola"`) ' +
+            'o elegí otro modelo en el CLI (/models).',
+        ));
+      }
     }
-    return;
+
+    const next = await clack.select({
+      message: '¿Cómo seguimos?',
+      options: [
+        { value: 'retry', label: 'Reintentar' },
+        ...(currentMode === 'deep' ? [{ value: 'shallow', label: 'Reintentar con análisis superficial', hint: 'prompt más chico' }] : []),
+        { value: 'provider', label: 'Elegir otro provider' },
+        { value: 'manual', label: 'Seguir sin IA', hint: 'completás nombre/stack a mano; funciones clasificadas por ruta' },
+        { value: 'cancel', label: 'Cancelar' },
+      ],
+    });
+    if (clack.isCancel(next) || next === 'cancel') return cancel();
+    if (next === 'shallow') currentMode = 'shallow';
+    if (next === 'provider') {
+      const p = await askProvider(provider);
+      if (!p) return cancel();
+      provider = p;
+    }
+    if (next === 'manual') {
+      aiEnabled = false;
+      analysis = {
+        name: path.basename(projectRoot),
+        description: '',
+        stackId: 'other',
+        databaseId: 'other',
+        branches: [],
+        skills: [],
+        agents: [],
+      };
+    }
   }
 
   // 4. Preview editable
   const stackPreset = getStack(analysis.stackId);
   const dbPreset = getDatabase(analysis.databaseId);
 
-  clack.note(
+  if (aiEnabled) clack.note(
     [
       `${ansi.bold('Sugerencias del análisis')}\n`,
       `Nombre:       ${analysis.name || ansi.dim('(vacío)')}`,
@@ -275,7 +317,7 @@ export async function runImportWizard(input) {
       agent: launchPick.agent,
       launch: launchPick.launchCommand ? { customCommand: launchPick.launchCommand } : {},
       // Same provider as the analysis classifies every function into sections.
-      analysis: { provider: provider.provider, model: provider.model },
+      analysis: aiEnabled ? { provider: provider.provider, model: provider.model } : null,
       onFunctionProgress: (done, total) => applySpinner.message(`Clasificando funciones con IA: ${done}/${total}`),
       branches,
       skills,
