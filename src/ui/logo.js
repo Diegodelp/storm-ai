@@ -3,33 +3,22 @@
  *
  * Two modes:
  *
- *   1. Half-block mode (preferred). Loads src/assets/logo.png, auto-crops
- *      black borders, resizes to TARGET_COLS × (rows * 2) pixels, and
- *      emits one terminal row per pair of source pixels using '▀'
- *      (U+2580): foreground = top pixel, background = bottom pixel.
- *      Result: near pixel-perfect rendition of the PNG in any terminal
- *      that supports 24-bit ANSI color.
+ *   1. Half-block mode (preferred). Draws the precomputed pixels in
+ *      src/assets/logo-pixels.js (assets/logo.png auto-cropped and
+ *      resized by `npm run build:logo`), one terminal row per pair of
+ *      pixel rows using '▀' (U+2580): foreground = top pixel,
+ *      background = bottom pixel. Needs a 24-bit color terminal, and no
+ *      image library at runtime.
  *
- *   2. ASCII fallback. If sharp fails to load or the PNG is missing,
- *      fall back to a hardcoded block-style STORM logo.
+ *   2. ASCII fallback, if the pixel data can't be decoded.
  */
-
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 
 import * as ansi from './ansi.js';
 import { getVersion } from '../core/version.js';
+import { LOGO_COLS, LOGO_PIXEL_ROWS, LOGO_RGB_BASE64 } from '../assets/logo-pixels.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const LOGO_PNG = path.resolve(__dirname, '../assets/logo.png');
-
-/** Target width in terminal columns. 80 is a good balance: narrow
- *  enough to fit in standard terminals (80-col default), wide enough
- *  to resolve the S segments and the lightning bolt clearly. */
-const TARGET_COLS = 80;
+/** Width in terminal columns (80 fits the default terminal width). */
+const TARGET_COLS = LOGO_COLS;
 
 /** Brightness threshold (sum of RGB 0..765) below which we treat a
  *  pixel as background — skips emitting ANSI for "blank" cells.
@@ -37,14 +26,11 @@ const TARGET_COLS = 80;
  *  tint from JPEG-like compression noise. */
 const BG_THRESHOLD = 60;
 
-/** Brightness threshold for the auto-crop of black borders. */
-const CROP_THRESHOLD = 90;
-
 let cachedLogo = null;
 
 /**
  * Main entry. Returns a multi-line string ready to print.
- * Async because sharp's API is async.
+ * Async for API compatibility with earlier versions.
  *
  * @returns {Promise<string>}
  */
@@ -60,7 +46,7 @@ export async function renderLogo() {
       if (err?.stack) process.stderr.write(err.stack + '\n');
     } else {
       process.stderr.write(
-        `[storm] Logo ASCII (logo.png no renderizable: ${err?.message ?? err})\n`,
+        `[storm] Logo ASCII (logo no renderizable: ${err?.message ?? err})\n`,
       );
     }
   }
@@ -90,50 +76,13 @@ export function renderFooter({
 // ---------------------------------------------------------------------------
 
 async function renderHalfBlocks() {
-  // Dynamic import so missing `sharp` throws inside the try/catch.
-  const sharpModule = await import('sharp');
-  const sharp = sharpModule.default ?? sharpModule;
-
-  const buf = readFileSync(LOGO_PNG);
-
-  // IMPORTANT: sharp pipelines are single-use. Each operation below
-  // creates a fresh sharp() instance from the original buffer. Reusing
-  // a pipeline after metadata()/toBuffer() returns corrupted data.
-
-  // 1. Source dimensions.
-  const meta = await sharp(buf).metadata();
-  if (!meta.width || !meta.height) {
-    throw new Error(`logo.png metadata inválida: ${JSON.stringify(meta)}`);
+  const resized = Buffer.from(LOGO_RGB_BASE64, 'base64');
+  const rows = LOGO_PIXEL_ROWS / 2;
+  if (resized.length !== TARGET_COLS * LOGO_PIXEL_ROWS * 3) {
+    throw new Error(`logo-pixels.js inválido (${resized.length} bytes)`);
   }
 
-  // 2. Read full image as raw RGB to compute the crop box.
-  const rawFull = await sharp(buf).removeAlpha().raw().toBuffer();
-  const expectedLen = meta.width * meta.height * 3;
-  if (rawFull.length < expectedLen) {
-    throw new Error(
-      `Buffer raw más chico de lo esperado: ${rawFull.length} < ${expectedLen}`,
-    );
-  }
-
-  const crop = findCropBox(rawFull, meta.width, meta.height, CROP_THRESHOLD);
-  const cropW = crop.right - crop.left;
-  const cropH = crop.bottom - crop.top;
-  if (cropW <= 0 || cropH <= 0) {
-    throw new Error(`Auto-crop devolvió región vacía (${cropW}x${cropH})`);
-  }
-
-  // 3. Extract + resize in a fresh pipeline.
-  const aspect = cropH / cropW;
-  const rows = Math.max(1, Math.round((TARGET_COLS * aspect) / 2));
-
-  const resized = await sharp(buf)
-    .removeAlpha()
-    .extract({ left: crop.left, top: crop.top, width: cropW, height: cropH })
-    .resize(TARGET_COLS, rows * 2, { fit: 'fill', kernel: 'lanczos3' })
-    .raw()
-    .toBuffer();
-
-  // 4. Emit half-blocks.
+  // Emit half-blocks.
   const lines = [];
   for (let ry = 0; ry < rows; ry++) {
     let line = '';
@@ -154,40 +103,6 @@ async function renderHalfBlocks() {
     lines.push(line.replace(/ +$/, ''));
   }
   return lines.join('\n');
-}
-
-function findCropBox(buf, w, h, threshold) {
-  const idx = (x, y) => (y * w + x) * 3;
-  const bright = (x, y) => {
-    const i = idx(x, y);
-    return buf[i] + buf[i + 1] + buf[i + 2];
-  };
-
-  let top = 0;
-  outerT: for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (bright(x, y) > threshold) { top = y; break outerT; }
-    }
-  }
-  let bottom = h;
-  outerB: for (let y = h - 1; y >= 0; y--) {
-    for (let x = 0; x < w; x++) {
-      if (bright(x, y) > threshold) { bottom = y + 1; break outerB; }
-    }
-  }
-  let left = 0;
-  outerL: for (let x = 0; x < w; x++) {
-    for (let y = 0; y < h; y++) {
-      if (bright(x, y) > threshold) { left = x; break outerL; }
-    }
-  }
-  let right = w;
-  outerR: for (let x = w - 1; x >= 0; x--) {
-    for (let y = 0; y < h; y++) {
-      if (bright(x, y) > threshold) { right = x + 1; break outerR; }
-    }
-  }
-  return { left, top, right, bottom };
 }
 
 // ---------------------------------------------------------------------------

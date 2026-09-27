@@ -1,6 +1,6 @@
 {
   "name": "storm-ai",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Context-aware project scaffolding for AI coding agents (Claude Code + Ollama).",
   "type": "module",
   "bin": {
@@ -9,7 +9,8 @@
   "main": "./src/cli.js",
   "scripts": {
     "start": "node bin/storm.js",
-    "test": "node --test"
+    "test": "node --test",
+    "build:logo": "node scripts/build-logo.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -48,7 +49,9 @@
     "@clack/prompts": "^0.7.0",
     "commander": "^12.1.0",
     "jsonc-parser": "^3.3.1",
-    "sharp": "^0.33.5",
     "string-width": "^8.2.0"
+  },
+  "devDependencies": {
+    "sharp": "^0.33.5"
   }
 }
